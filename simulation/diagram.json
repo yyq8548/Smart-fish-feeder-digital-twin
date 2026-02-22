@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "author": "Smart Fish Feeder Digital Twin",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-arduino-mega",
+      "id": "mega",
+      "top": 0,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ds18b20",
+      "id": "temp1",
+      "top": -100,
+      "left": 50,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ds1307",
+      "id": "rtc1",
+      "top": -100,
+      "left": 250,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 160,
+      "left": 420,
+      "attrs": {
+        "color": "green"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledCooling",
+      "top": -90,
+      "left": 500,
+      "attrs": {
+        "color": "blue",
+        "label": "Peltier Cooling"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledEnable",
+      "top": -40,
+      "left": 500,
+      "attrs": {
+        "color": "yellow",
+        "label": "Pump Enable"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledForward",
+      "top": 10,
+      "left": 500,
+      "attrs": {
+        "color": "green",
+        "label": "Pump Forward"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "ledReverse",
+      "top": 60,
+      "left": 500,
+      "attrs": {
+        "color": "red",
+        "label": "Pump Reverse"
+      }
+    }
+  ],
+  "connections": [
+    [
+      "temp1:VCC",
+      "mega:5V",
+      "red",
+      []
+    ],
+    [
+      "temp1:GND",
+      "mega:GND.1",
+      "black",
+      []
+    ],
+    [
+      "temp1:DQ",
+      "mega:2",
+      "green",
+      []
+    ],
+    [
+      "rtc1:VCC",
+      "mega:5V",
+      "red",
+      []
+    ],
+    [
+      "rtc1:GND",
+      "mega:GND.1",
+      "black",
+      []
+    ],
+    [
+      "rtc1:SDA",
+      "mega:20",
+      "green",
+      []
+    ],
+    [
+      "rtc1:SCL",
+      "mega:21",
+      "blue",
+      []
+    ],
+    [
+      "btn1:1.l",
+      "mega:6",
+      "green",
+      []
+    ],
+    [
+      "btn1:2.r",
+      "mega:GND.1",
+      "black",
+      []
+    ],
+    [
+      "ledCooling:A",
+      "mega:8",
+      "blue",
+      []
+    ],
+    [
+      "ledCooling:C",
+      "mega:GND.1",
+      "black",
+      []
+    ],
+    [
+      "ledEnable:A",
+      "mega:10",
+      "yellow",
+      []
+    ],
+    [
+      "ledEnable:C",
+      "mega:GND.1",
+      "black",
+      []
+    ],
+    [
+      "ledForward:A",
+      "mega:3",
+      "green",
+      []
+    ],
+    [
+      "ledForward:C",
+      "mega:GND.1",
+      "black",
+      []
+    ],
+    [
+      "ledReverse:A",
+      "mega:4",
+      "red",
+      []
+    ],
+    [
+      "ledReverse:C",
+      "mega:GND.1",
+      "black",
+      []
+    ]
+  ],
+  "dependencies": {}
+}

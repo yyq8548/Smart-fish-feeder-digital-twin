@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Fish Feeder Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <main class="container">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Embedded Control Simulation</p>
+        <h1>Smart Fish Feeder Digital Twin</h1>
+        <p class="subtitle">
+          A software dashboard mock for monitoring a temperature-controlled automated liquid fish-feeder system.
+        </p>
+      </div>
+      <div class="status-pill" id="systemHealth">System Normal</div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h2>Reservoir Temperature</h2>
+        <p class="metric"><span id="temperature">4.6</span>°C</p>
+        <p class="hint">Target range: 3.0°C – 5.0°C</p>
+      </article>
+
+      <article class="card">
+        <h2>Cooling</h2>
+        <p class="metric" id="coolingStatus">OFF</p>
+        <p class="hint">MOSFET-driven Peltier module</p>
+      </article>
+
+      <article class="card">
+        <h2>Pump State</h2>
+        <p class="metric" id="pumpStatus">IDLE</p>
+        <p class="hint">Forward dosing + reverse cleaning</p>
+      </article>
+
+      <article class="card">
+        <h2>Next Feeding</h2>
+        <p class="metric" id="nextFeeding">19:16</p>
+        <p class="hint">RTC-based schedule</p>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2>Temperature History</h2>
+          <p>Mock telemetry stream simulating DS18B20 sensor readings.</p>
+        </div>
+        <div class="actions">
+          <button id="feedBtn">Manual Feed</button>
+          <button id="cleanBtn">Clean Pump</button>
+        </div>
+      </div>
+      <canvas id="tempChart"></canvas>
+    </section>
+
+    <section class="panel">
+      <h2>Event Log</h2>
+      <ul id="eventLog"></ul>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
