@@ -2,41 +2,64 @@
 
 A software-oriented upgrade of an Arduino-based automated liquid fish-feeder system.
 
-The original project used:
+This project started as a physical embedded-system prototype using an Arduino, DS18B20 temperature sensor, DS1307 RTC module, L293D motor driver, peristaltic pump, MOSFET-driven Peltier cooling, and reverse-pump cleaning logic. It has been upgraded into a digital twin system with a Wokwi simulation, FastAPI telemetry backend, SQLite database, mock ESP32 client, and web dashboard.
 
-- DS18B20 temperature sensor
-- DS1307 RTC module
-- L293D motor driver
-- Peristaltic pump
-- MOSFET-driven Peltier cooling
-- Reverse-pump cleaning logic
-- Wokwi simulation
+---
 
-The v2 upgrade adds:
+## Demo
 
-- FastAPI backend
-- SQLite database
-- SQLAlchemy persistence layer
-- Mock ESP32 telemetry client
-- Web dashboard consuming real API data
-- Rule-based alerts for abnormal temperature and pump errors
+### Live Wokwi Simulation
+
+[Open the Wokwi Arduino simulation](https://wokwi.com/projects/468425567572330497)
+
+The Wokwi simulation demonstrates the embedded control logic for temperature monitoring, RTC-based scheduled dosing, Peltier cooling control, pump actuation, and reverse-pump cleaning.
+
+### Physical Prototype Demo
+
+[Watch the physical fish-feeder demo video](https://drive.google.com/file/d/1-BNHRS8WrIlX6UmlVeAYz3xfRProdbw3/view?usp=sharing)
+
+The physical prototype shows the original automated liquid fish-feeder system with custom housing, pump control, and reservoir-based feeding workflow.
+
+### Dashboard Demo
+
+![Dashboard showing live telemetry](docs/images/dashboard.png)
+
+### FastAPI Backend
+
+![FastAPI Swagger documentation](docs/images/fastapi_docs.png)
+
+---
+
+## Key Features
+
+- Arduino-based embedded control logic for automated liquid feeding
+- DS18B20 temperature monitoring for reservoir temperature tracking
+- DS1307 RTC-based scheduled dosing
+- Peltier cooling control through MOSFET logic
+- L293D motor control for pump forward dosing and reverse-pump cleaning
+- Wokwi simulation for online embedded-system demonstration
+- FastAPI backend for telemetry ingestion and device-status APIs
+- SQLite database with SQLAlchemy persistence
+- Mock ESP32 telemetry client for simulated IoT data streaming
+- Web dashboard for temperature history, pump state, feeding events, and alerts
+- Rule-based alerting for abnormal reservoir temperature and pump errors
 
 ---
 
 ## System Architecture
 
 ```text
-Mock ESP32 Client / Wokwi Simulation
-              |
-              | POST /telemetry
-              v
-        FastAPI Backend
-              |
-              v
-        SQLite Database
-              |
-              v
-        Web Dashboard
+Physical Prototype / Wokwi Simulation / Mock ESP32 Client
+                         |
+                         | POST /telemetry
+                         v
+                  FastAPI Backend
+                         |
+                         v
+                  SQLite Database
+                         |
+                         v
+                  Web Dashboard
 ```
 
 ---
@@ -44,7 +67,7 @@ Mock ESP32 Client / Wokwi Simulation
 ## Project Structure
 
 ```text
-smart_fish_feeder_digital_twin_v2/
+smart_fish_feeder_digital_twin/
 ├── backend/
 │   ├── main.py
 │   ├── requirements.txt
@@ -59,9 +82,11 @@ smart_fish_feeder_digital_twin_v2/
 │   ├── app.js
 │   └── README.md
 ├── docs/
+│   ├── images/
+│   │   ├── dashboard.png
+│   │   └── fastapi_docs.png
 │   ├── architecture_v2.md
-│   ├── api_design.md
-│   └── resume_bullets.md
+│   └── api_design.md
 ├── firmware/
 │   └── README.md
 ├── simulation/
@@ -77,10 +102,11 @@ smart_fish_feeder_digital_twin_v2/
 
 ```powershell
 cd backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn main:app --reload
+
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn main:app --reload
 ```
 
 Backend URL:
@@ -89,23 +115,38 @@ Backend URL:
 http://127.0.0.1:8000
 ```
 
-API docs:
+API documentation:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-### 2. Start the mock ESP32 client
+---
+
+### 2. Start the mock ESP32 telemetry client
 
 Open a second PowerShell window:
 
 ```powershell
 cd mock_device
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python mock_esp32_client.py
+
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe mock_esp32_client.py
 ```
+
+The mock client sends simulated telemetry to the backend every 2 seconds.
+
+Example output:
+
+```text
+temp=4.6C cooling=False pump=IDLE alert=normal
+temp=5.4C cooling=True pump=IDLE alert=warning
+temp=6.2C cooling=True pump=IDLE alert=critical
+```
+
+---
 
 ### 3. Open the dashboard
 
@@ -115,7 +156,7 @@ Open this file in your browser:
 dashboard/index.html
 ```
 
-The dashboard will fetch data from:
+The dashboard fetches live data from:
 
 ```text
 http://127.0.0.1:8000
@@ -127,10 +168,11 @@ http://127.0.0.1:8000
 
 | Method | Endpoint | Description |
 |---|---|---|
-| POST | `/telemetry` | Ingest simulated device telemetry |
-| GET | `/telemetry` | Return recent telemetry history |
-| GET | `/device-status` | Return latest device status |
-| GET | `/alerts` | Return warning and critical alerts |
+| `GET` | `/` | API root and service metadata |
+| `POST` | `/telemetry` | Ingest simulated device telemetry |
+| `GET` | `/telemetry` | Return recent telemetry history |
+| `GET` | `/device-status` | Return the latest device status |
+| `GET` | `/alerts` | Return warning and critical alerts |
 
 ---
 
@@ -145,25 +187,44 @@ http://127.0.0.1:8000
 }
 ```
 
----
+Example response:
 
-## Resume Bullets
-
-```text
-Smart Fish Feeder Digital Twin | Personal Project
-Atlanta, GA | Apr 2023 – Jan 2024
-
-- Reconstructed an Arduino-based liquid fish-feeder as a Wokwi simulation with modular firmware for temperature monitoring, RTC-based scheduled dosing, Peltier cooling, and reverse-pump cleaning.
-- Built a FastAPI backend with SQLite and SQLAlchemy to ingest simulated ESP32 telemetry, persist temperature and feeding logs, and expose device-status APIs.
-- Developed a web dashboard that consumes live API data to visualize reservoir temperature, pump state, feeding events, and rule-based alerts.
+```json
+{
+  "id": 1,
+  "temperature_c": 4.6,
+  "cooling_on": false,
+  "pump_state": "IDLE",
+  "event_type": null,
+  "alert_level": "normal",
+  "alert_message": null,
+  "created_at": "2026-07-02T13:00:00Z"
+}
 ```
 
 ---
 
-## Future Improvements
+## Rule-Based Alerts
 
-- Replace mock client with a real ESP32 Wi-Fi client
-- Add authentication for device telemetry ingestion
-- Add WebSocket support for real-time dashboard updates
-- Deploy backend with Docker
-- Add PostgreSQL for production deployment
+The backend assigns alert levels based on incoming telemetry:
+
+| Condition | Alert Level | Message |
+|---|---|---|
+| `pump_state == "ERROR"` | Critical | Pump reported an error state |
+| `temperature_c >= 6.0` | Critical | Reservoir temperature is dangerously high |
+| `temperature_c > 5.0` | Warning | Reservoir temperature is above target range |
+| `temperature_c < 2.5` | Warning | Reservoir temperature is below target range |
+| Otherwise | Normal | No active alert |
+
+---
+
+## Tech Stack
+
+| Layer | Tools |
+|---|---|
+| Embedded simulation | Arduino, Wokwi |
+| Sensor/control logic | DS18B20, DS1307 RTC, L293D, MOSFET/Peltier control |
+| Backend | FastAPI, Pydantic |
+| Database | SQLite, SQLAlchemy |
+| Mock IoT client | Python, Requests |
+| Frontend dashboard | HTML, CSS, JavaScript, Chart.js |
