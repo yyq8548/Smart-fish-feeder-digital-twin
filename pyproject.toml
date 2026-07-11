@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+addopts = "--cov=backend/app --cov-report=term-missing --cov-fail-under=85"
+pythonpath = ["backend"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["backend/app", "mock_device"]
+plugins = ["pydantic.mypy"]

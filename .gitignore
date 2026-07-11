@@ -19,3 +19,10 @@ Thumbs.db
 node_modules/
 dist/
 build/
+data/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+coverage/
+.env

@@ -153,3 +153,18 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+.status-pill[data-level="critical"] {
+  background: #fde8e8;
+  color: #9b1c1c;
+}
+
+.status-pill[data-level="warning"] {
+  background: #fff6e5;
+  color: #9a6300;
+}
+
+.status-pill[data-level="normal"] {
+  background: #e8f6ee;
+  color: #1f7a43;
+}

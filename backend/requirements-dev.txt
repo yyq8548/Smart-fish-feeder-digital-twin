@@ -1,0 +1,8 @@
+-r requirements.txt
+httpx==0.28.1
+mypy==1.14.1
+pip-audit==2.7.3
+pytest==8.3.4
+pytest-cov==6.0.0
+ruff==0.8.6
+types-requests==2.32.0.20241016

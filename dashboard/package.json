@@ -1,0 +1,17 @@
+{
+  "name": "smart-fish-feeder-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.17.0",
+    "@vitest/coverage-v8": "2.1.8",
+    "eslint": "9.17.0",
+    "globals": "15.14.0",
+    "jsdom": "25.0.1",
+    "vitest": "2.1.8"
+  }
+}
