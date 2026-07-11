@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "author": "Smart Fish Feeder Digital Twin",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 40,
+      "left": 20,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ds18b20",
+      "id": "temperature",
+      "top": -130,
+      "left": -170,
+      "attrs": {
+        "temperature": "4.0"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "temperaturePullup",
+      "top": -65,
+      "left": -75,
+      "rotate": 90,
+      "attrs": {
+        "value": "4700"
+      }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "manualFeed",
+      "top": 235,
+      "left": -180,
+      "attrs": {
+        "color": "green",
+        "label": "Manual Feed"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "coolingLed",
+      "top": -115,
+      "left": 360,
+      "attrs": {
+        "color": "blue",
+        "label": "Cooling"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "pumpEnableLed",
+      "top": -35,
+      "left": 360,
+      "attrs": {
+        "color": "yellow",
+        "label": "Pump Enable"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "pumpForwardLed",
+      "top": 45,
+      "left": 360,
+      "attrs": {
+        "color": "green",
+        "label": "Pump Forward"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "pumpReverseLed",
+      "top": 125,
+      "left": 360,
+      "attrs": {
+        "color": "red",
+        "label": "Pump Reverse"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "coolingResistor",
+      "top": -77,
+      "left": 285,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "pumpEnableResistor",
+      "top": 3,
+      "left": 285,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "pumpForwardResistor",
+      "top": 83,
+      "left": 285,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "pumpReverseResistor",
+      "top": 163,
+      "left": 285,
+      "attrs": {
+        "value": "220"
+      }
+    }
+  ],
+  "connections": [
+    ["esp:TX0", "$serialMonitor:RX", "", []],
+    ["esp:RX0", "$serialMonitor:TX", "", []],
+    ["temperature:VCC", "esp:3V3", "red", []],
+    ["temperature:GND", "esp:GND.1", "black", []],
+    ["temperature:DQ", "esp:D4", "green", []],
+    ["temperaturePullup:1", "temperature:DQ", "green", []],
+    ["temperaturePullup:2", "esp:3V3", "red", []],
+    ["manualFeed:1.l", "esp:D18", "green", []],
+    ["manualFeed:2.r", "esp:GND.1", "black", []],
+    ["esp:D25", "coolingResistor:1", "blue", []],
+    ["coolingResistor:2", "coolingLed:A", "blue", []],
+    ["coolingLed:C", "esp:GND.2", "black", []],
+    ["esp:D33", "pumpEnableResistor:1", "yellow", []],
+    ["pumpEnableResistor:2", "pumpEnableLed:A", "yellow", []],
+    ["pumpEnableLed:C", "esp:GND.2", "black", []],
+    ["esp:D26", "pumpForwardResistor:1", "green", []],
+    ["pumpForwardResistor:2", "pumpForwardLed:A", "green", []],
+    ["pumpForwardLed:C", "esp:GND.2", "black", []],
+    ["esp:D27", "pumpReverseResistor:1", "red", []],
+    ["pumpReverseResistor:2", "pumpReverseLed:A", "red", []],
+    ["pumpReverseLed:C", "esp:GND.2", "black", []]
+  ],
+  "dependencies": {}
+}

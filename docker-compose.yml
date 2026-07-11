@@ -3,49 +3,72 @@ services:
     build: ./backend
     environment:
       FISH_FEEDER_DATABASE_URL: sqlite:////app/data/fish_feeder.db
+      FISH_FEEDER_BOOTSTRAP_DEVICE_UID: ${DEVICE_UID:-feeder-001}
       FISH_FEEDER_DEVICE_API_KEY: ${FISH_FEEDER_DEVICE_API_KEY:-local-development-key}
-      FISH_FEEDER_CORS_ORIGINS: http://localhost:8080
+      FISH_FEEDER_CREDENTIAL_PEPPER: ${FISH_FEEDER_CREDENTIAL_PEPPER:-local-development-credential-pepper}
+      FISH_FEEDER_ADMIN_USERNAME: ${FISH_FEEDER_ADMIN_USERNAME:-admin}
+      FISH_FEEDER_ADMIN_PASSWORD: ${FISH_FEEDER_ADMIN_PASSWORD:-local-development-admin-password}
+      FISH_FEEDER_JWT_SECRET: ${FISH_FEEDER_JWT_SECRET:-local-development-jwt-secret-change-me}
+      FISH_FEEDER_CORS_ORIGINS: ${FISH_FEEDER_CORS_ORIGINS:-http://localhost:8080}
     volumes:
       - feeder-data:/app/data
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
-      interval: 10s
+      interval: 5s
       timeout: 3s
-      retries: 5
+      retries: 12
+      start_period: 5s
 
   dashboard:
     build: ./dashboard
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   mqtt:
     image: eclipse-mosquitto:2.0
     command: mosquitto -c /mosquitto-no-auth.conf
     ports:
-      - "1883:1883"
+      - "127.0.0.1:1883:1883"
     healthcheck:
       test: ["CMD", "mosquitto_sub", "-h", "127.0.0.1", "-t", "$$SYS/broker/version", "-C", "1", "-W", "3"]
-      interval: 10s
+      interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 5s
 
   mqtt-bridge:
     build: ./mock_device
     command: python mqtt_bridge.py
     environment:
       API_URL: http://backend:8000/telemetry
+      DEVICE_UID: ${DEVICE_UID:-feeder-001}
       DEVICE_API_KEY: ${FISH_FEEDER_DEVICE_API_KEY:-local-development-key}
+      MQTT_SHARED_SECRET: ${MQTT_SHARED_SECRET:-local-development-mqtt-secret}
+      DEVICE_CREDENTIALS_JSON: ${DEVICE_CREDENTIALS_JSON:-}
+      MQTT_SHARED_SECRETS_JSON: ${MQTT_SHARED_SECRETS_JSON:-}
       MQTT_HOST: mqtt
     depends_on:
       backend:
         condition: service_healthy
       mqtt:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('mqtt', 1883), 3).close()"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 5s
 
 volumes:
   feeder-data:

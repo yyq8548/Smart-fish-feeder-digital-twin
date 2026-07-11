@@ -1,31 +1,28 @@
-# Smart Fish Feeder Digital Twin v2 Architecture
+# Smart Fish Feeder Digital Twin v4 architecture
 
 ```text
-Wokwi Arduino Simulation / Mock ESP32 Client
-                |
-                | POST /telemetry
-                v
-        FastAPI Backend
-                |
-                | SQLAlchemy ORM
-                v
-          SQLite Database
-                |
-                | GET /device-status
-                | GET /telemetry
-                | GET /alerts
-                v
-          Web Dashboard
+ESP32/Wokwi --MQTT--> Mosquitto --> bridge --HTTP--> FastAPI
+Mock client ----------------------------------------HTTP--> |
+                                                         |
+                    +------------------------------------+------------------+
+                    |                                    |                  |
+              identity/security                    domain services    reliability worker
+                    |                                    |                  |
+          users + device credentials       schedules/executions/alerts/commands
+                    +------------------------------------+------------------+
+                                                         |
+                                                SQLAlchemy + Alembic
+                                                         |
+                                                  persistent SQLite
+                                                         |
+                                               Nginx dashboard / API
 ```
 
-## Why this is more SDE-oriented
+## Design choices
 
-This v2 upgrade turns the original embedded hardware project into a full software system:
-
-- API design
-- Data ingestion
-- Database persistence
-- Telemetry pipeline
-- Rule-based alerting
-- Frontend dashboard integration
-- Local development workflow
+- A modular monolith keeps the portfolio system reproducible while still separating configuration, schemas, persistence, security, rate limiting, logging, and reliability logic.
+- MQTT decouples device connectivity from API/database concerns; the bridge translates device messages into the authenticated ingestion contract.
+- Database uniqueness constraints and idempotency keys protect HTTP retry behavior.
+- Sequence numbers and event-time validation make ordering failures explicit.
+- Durable alerts and feeding executions allow acknowledgement, auditing, and missed-operation detection.
+- Alembic owns schema evolution; Docker runs migrations before serving traffic.

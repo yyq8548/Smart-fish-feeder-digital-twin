@@ -1,6 +1,6 @@
 # Dashboard
 
-This dashboard fetches real data from the FastAPI backend.
+This Nginx-served dashboard fetches live status, ordered telemetry, and durable alerts from the FastAPI backend. It renders offline and empty states and exposes API failures instead of silently displaying stale data.
 
 ## Run
 
@@ -18,10 +18,10 @@ cd mock_device
 python mock_esp32_client.py
 ```
 
-Then open:
+For the complete container setup, open:
 
 ```text
-dashboard/index.html
+http://localhost:8080
 ```
 
 The dashboard reads:
@@ -29,3 +29,5 @@ The dashboard reads:
 - `GET /device-status`
 - `GET /telemetry`
 - `GET /alerts`
+
+Run its ESLint and Vitest quality gates with `pnpm lint` and `pnpm test`.

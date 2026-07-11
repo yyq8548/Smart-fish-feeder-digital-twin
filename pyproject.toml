@@ -1,7 +1,7 @@
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
-addopts = "--cov=backend/app --cov-report=term-missing --cov-fail-under=85"
-pythonpath = ["backend"]
+addopts = "--basetemp=.pytest-tmp --cov=backend/app --cov-report=term-missing --cov-fail-under=85"
+pythonpath = [".", "backend"]
 
 [tool.ruff]
 line-length = 120
@@ -12,6 +12,9 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/conftest.py" = ["E402"]
 
 [tool.mypy]
 python_version = "3.11"

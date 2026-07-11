@@ -1,283 +1,199 @@
-# Smart Fish Feeder Digital Twin v2
+# Smart Fish Feeder Digital Twin v4
 
 [![CI](https://github.com/yyq8548/Smart-fish-feeder-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/yyq8548/Smart-fish-feeder-digital-twin/actions/workflows/ci.yml)
-![Backend coverage](https://img.shields.io/badge/backend%20coverage-96.65%25-brightgreen)
-![Frontend coverage](https://img.shields.io/badge/frontend%20coverage-100%25-brightgreen)
+![Backend coverage](https://img.shields.io/badge/backend%20coverage-92%25-brightgreen)
+![Frontend line coverage](https://img.shields.io/badge/frontend%20line%20coverage-100%25-brightgreen)
 
-A software-oriented upgrade of an Arduino-based automated liquid fish-feeder system.
+An IoT operations platform built around a real temperature-controlled liquid fish-feeder prototype. The project began with Arduino hardware, a DS18B20 sensor, DS1307 clock, L293D-controlled peristaltic pump, Peltier cooling, and 3D-printed parts. It now includes ESP32 firmware, Wokwi simulation, MQTT transport, authenticated FastAPI services, durable operational records, automated reliability checks, and a browser dashboard.
 
-This project started as a physical embedded-system prototype using an Arduino, DS18B20 temperature sensor, DS1307 RTC module, L293D motor driver, peristaltic pump, MOSFET-driven Peltier cooling, and reverse-pump cleaning logic. It has been upgraded into a digital twin system with a Wokwi simulation, FastAPI telemetry backend, SQLite database, mock ESP32 client, and web dashboard.
+## Why this is an SDE project
 
-The current v3 engineering upgrade emphasizes software reliability: authenticated and idempotent telemetry ingestion, heartbeat-based offline detection, MQTT integration, environment-based configuration, automated tests, strict static analysis, dependency auditing, and reproducible container deployment.
+- 42 backend unit, integration, security, reliability, migration, command-lifecycle, and MQTT-signature tests
+- Frontend tests for live, empty, and failed API states
+- Pull-request CI for Ruff, strict mypy, Pytest, ESLint, Vitest, ESP32 compilation, dependency audits, migrations, Docker builds, and an end-to-end Compose smoke test
+- Per-device credentials stored as keyed hashes, signed MQTT messages, Argon2 operator passwords, JWT login, key rotation, restricted CORS, and rate limiting
+- Idempotent ingestion, monotonic event ordering, timestamp validation, heartbeats, retry handling, and structured JSON request logs
+- Durable devices, schedules, feeding executions, alerts, acknowledgements, and device-command lifecycle records
+- Alembic migrations that create a fresh schema or upgrade the unversioned v3 prototype schema
 
-## Software Engineering Highlights
-
-- Modular FastAPI application with typed schemas, services, persistence models, and environment configuration
-- Per-device API-key authentication and idempotency keys for safe device retries
-- Heartbeat monitoring that detects stale or offline devices
-- Relational models for devices, telemetry, and feeding schedules
-- MQTT-to-HTTP bridge with bounded exponential retry for ESP32 or Wokwi publishers
-- 14 backend tests with 96.65% line coverage and 6 frontend tests with 100% line coverage
-- Pull-request gates for formatting, linting, strict typing, tests, dependency audits, and Docker builds
-- Non-root, health-checked containers with persistent database storage
-
----
-
-## Demo
-
-### Live Wokwi Simulation
-
-[Open the Wokwi Arduino simulation](https://wokwi.com/projects/468425567572330497)
-
-The Wokwi simulation demonstrates the embedded control logic for temperature monitoring, RTC-based scheduled dosing, Peltier cooling control, pump actuation, and reverse-pump cleaning.
-
-### Physical Prototype Demo
-
-[Watch the physical fish-feeder demo video](https://drive.google.com/file/d/1-BNHRS8WrIlX6UmlVeAYz3xfRProdbw3/view?usp=sharing)
-
-The physical prototype shows the original automated liquid fish-feeder system with custom housing, pump control, and reservoir-based feeding workflow.
-
-### Dashboard Demo
-
-![Dashboard showing live telemetry](docs/images/dashboard.png)
-![Dashboard showing live telemetry](docs/images/alerts.png)
-
-### FastAPI Backend
-
-![FastAPI Swagger documentation](docs/images/fastapi_docs.png)
-
----
-
-## Key Features
-
-- Arduino-based embedded control logic for automated liquid feeding
-- DS18B20 temperature monitoring for reservoir temperature tracking
-- DS1307 RTC-based scheduled dosing
-- Peltier cooling control through MOSFET logic
-- L293D motor control for pump forward dosing and reverse-pump cleaning
-- Wokwi simulation for online embedded-system demonstration
-- FastAPI backend for telemetry ingestion and device-status APIs
-- SQLite database with SQLAlchemy persistence
-- Mock ESP32 telemetry client for simulated IoT data streaming
-- Web dashboard for temperature history, pump state, feeding events, and alerts
-- Rule-based alerting for abnormal reservoir temperature and pump errors
-
----
-
-## System Architecture
+## Architecture
 
 ```text
-Physical ESP32 / Wokwi / Mock Device
-              | HTTP or MQTT (QoS 1)
-              v
-        MQTT-to-HTTP Bridge
-              | authenticated + idempotent POST /telemetry
-              v
-         FastAPI Backend
-              |
-              v
-   Persistent SQLite Database
-              |
-              v
-     Nginx Web Dashboard
+Physical ESP32 / Wokwi ESP32 / Mock client
+                  |
+             MQTT or HTTP
+                  v
+          Mosquitto + bridge
+                  |
+      authenticated / idempotent
+                  v
+             FastAPI v4
+       +----------+----------+
+       |                     |
+  SQLAlchemy/Alembic     JSON logs + alerts
+       |                     |
+  persistent SQLite     reliability scanner
+       |
+       v
+ Nginx dashboard + REST/Swagger API
 ```
 
-## One-Command Container Setup
+## Implemented capabilities
 
-Docker Compose starts the API, persistent database volume, Nginx dashboard, Mosquitto broker, and MQTT bridge:
+### Device and telemetry
+
+- Wokwi-compatible ESP32 firmware using WiFi, PubSubClient, and DS18B20
+- Cooling hysteresis, scheduled/manual feeding, and reverse-pump cleaning
+- MQTT-to-HTTP bridge with bounded exponential retry
+- Versioned, full-payload HMAC-SHA256 signatures prevent an untrusted broker client from changing sensor or feeding data before the bridge authenticates it
+- Per-device API keys, sequence numbers, idempotency keys, UTC event time, and sensor health
+- Duplicate delivery protection and explicit rejection of stale, future, or out-of-order telemetry
+
+### Operations
+
+- Device provisioning and credential rotation
+- Feeding-schedule CRUD with IANA timezones and configurable grace periods; the server dispatches exactly-once scheduled commands using date-scoped idempotency keys
+- Feeding execution history and automatic missed-feeding detection
+- Durable temperature, pump, sensor, offline, and missed-feeding alerts
+- Operator alert acknowledgement
+- `FEED_NOW`, `CLEAN_PUMP`, and `SET_COOLING` command lifecycle APIs with typed/size-bounded payloads, idempotency keys, atomic claims, expiring leases, signed MQTT delivery, and signed completion results
+- Reboot-safe command replay protection: the ESP32 persists the highest accepted command ID in NVS before physical actuation
+
+### Delivery and verification
+
+- Non-root backend, dashboard, and bridge containers
+- Database volume and service health checks
+- Full-stack Compose smoke test covering migrations, login, device provisioning, invalid credentials, HTTP ingestion, MQTT delivery, dashboard serving, and Nginx API proxying
+- Python and JavaScript vulnerability audits on every pull request
+
+## Demos
+
+- [Original physical prototype video](https://drive.google.com/file/d/1-BNHRS8WrIlX6UmlVeAYz3xfRProdbw3/view?usp=sharing)
+- [Original Arduino/Wokwi control simulation](https://wokwi.com/projects/468425567572330497)
+- [ESP32 MQTT simulation instructions](simulation/esp32-mqtt/README.md)
+
+![Dashboard showing live telemetry](docs/images/dashboard.png)
+![Dashboard showing alerts](docs/images/alerts.png)
+
+## One-command setup
+
+Requirements: Docker with Compose v2.
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
 
-Open the dashboard at `http://localhost:8080`, the API at `http://localhost:8000`, and Swagger UI at `http://localhost:8000/docs`. Replace the demonstration API key in `.env` before any shared deployment.
+Then open:
 
-## Quality Gates
+- Dashboard: <http://localhost:8080>
+- API: <http://localhost:8000>
+- Swagger UI: <http://localhost:8000/docs>
 
-Run the same checks enforced on every pull request:
+The defaults are for local demonstration only. Host ports bind to loopback, including the anonymous development MQTT broker. Replace every value in `.env` and use an authenticated TLS broker before connecting hardware over a LAN or exposing any service outside your computer.
+
+Run the exact end-to-end CI smoke test locally with:
+
+```bash
+bash scripts/compose-smoke.sh
+```
+
+## Local backend development
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt -r mock_device\requirements.txt
+
+cd backend
+..\.venv\Scripts\alembic.exe upgrade head
+..\.venv\Scripts\python.exe -m uvicorn main:app --reload
+```
+
+Start the direct HTTP simulator in another terminal:
+
+```powershell
+$env:DEVICE_API_KEY = "local-development-key"
+.\.venv\Scripts\python.exe mock_device\mock_esp32_client.py
+```
+
+## Authentication workflow
+
+Operators authenticate at `POST /auth/token`. A bearer token is required to provision devices, rotate keys, manage schedules, acknowledge alerts, issue commands, and run an immediate reliability scan.
+
+Devices send both headers on ingestion and command calls. The bridge supports one device through `DEVICE_UID`/`DEVICE_API_KEY` or multiple explicitly allowlisted devices through matching `DEVICE_CREDENTIALS_JSON` and `MQTT_SHARED_SECRETS_JSON` maps. Compose passes these values through from `.env`:
+
+```text
+X-Device-ID: feeder-001
+X-Device-Key: <device key>
+```
+
+Provisioned device keys are returned once; only a keyed SHA-256 digest is stored. Operator passwords are hashed with Argon2.
+
+## Telemetry contract
+
+```json
+{
+  "device_uid": "feeder-001",
+  "idempotency_key": "mqtt-a1b2c3d4-1783773296000123",
+  "sequence_number": 1783773296000123,
+  "recorded_at": "2026-07-11T12:34:56Z",
+  "temperature_c": 4.6,
+  "cooling_on": false,
+  "pump_state": "IDLE",
+  "sensor_status": "OK",
+  "event_type": "heartbeat"
+}
+```
+
+When the temperature sensor is disconnected, `temperature_c` is `null` and `sensor_status` is `DISCONNECTED`; the backend creates a critical durable alert.
+
+## Main APIs
+
+| Area | Endpoints |
+| --- | --- |
+| Authentication | `POST /auth/token`, `GET /users/me` |
+| Devices | `POST/GET /devices`, `POST /devices/{uid}/rotate-key` |
+| Telemetry | `POST/GET /telemetry`, `GET /device-status` |
+| Schedules | `POST/GET /devices/{uid}/schedules`, `PATCH/DELETE /schedules/{id}` |
+| Operations | `GET /feeding-executions`, `GET /alerts`, `POST /alerts/{id}/acknowledge` |
+| Commands | `POST/GET /devices/{uid}/commands`, `POST /device-commands/claim`, `POST /device-commands/{id}/complete` |
+| Reliability | `POST /reliability/scan` plus automatic schedule dispatch and missed/offline scanning |
+
+## Quality gates
+
+```powershell
 .\.venv\Scripts\ruff.exe format --check .
 .\.venv\Scripts\ruff.exe check .
 .\.venv\Scripts\mypy.exe
 .\.venv\Scripts\pytest.exe
+.\.venv\Scripts\pip-audit.exe -r backend\requirements-dev.txt -r mock_device\requirements.txt
 
 cd dashboard
 pnpm install --frozen-lockfile
 pnpm lint
 pnpm test
+pnpm audit
 ```
 
-Backend coverage includes alert boundaries at 2.5°C, 5.0°C, and 6.0°C; schema validation; authentication; duplicate delivery; empty-database behavior; and every REST endpoint. Frontend coverage includes live data, empty data, alerts, chart updates, polling, and API failures.
-
----
-
-## Project Structure
+## Repository map
 
 ```text
-smart_fish_feeder_digital_twin/
-├── backend/
-│   ├── main.py
-│   ├── requirements.txt
-│   └── README.md
-├── mock_device/
-│   ├── mock_esp32_client.py
-│   ├── requirements.txt
-│   └── README.md
-├── dashboard/
-│   ├── index.html
-│   ├── style.css
-│   ├── app.js
-│   └── README.md
-├── docs/
-│   ├── images/
-│   │   ├── dashboard.png
-│   │   └── fastapi_docs.png
-│   ├── architecture_v2.md
-│   └── api_design.md
-├── firmware/
-│   └── README.md
-├── simulation/
-│   └── README.md
-└── .gitignore
+backend/                 FastAPI app, Alembic migrations, tests, Dockerfile
+dashboard/               Nginx-served JavaScript dashboard and Vitest suite
+firmware/esp32_mqtt/     Networked ESP32 firmware
+firmware/sketch.ino      Preserved original Arduino Mega firmware
+simulation/esp32-mqtt/   Wokwi ESP32 wiring and setup
+mock_device/             HTTP simulator and MQTT-to-HTTP bridge
+scripts/                 End-to-end Compose smoke test
+docs/                    Architecture, API, wiring, and state-machine notes
+docker-compose.yml       Complete local system
 ```
 
----
+## Honest deployment boundaries
 
-## Quick Start on Windows PowerShell
+- SQLite and the in-process rate limiter fit a single-instance portfolio deployment; a horizontally scaled deployment should use PostgreSQL and a shared Redis-backed limiter.
+- The public MQTT settings in the Wokwi guide are for nonsensitive demos. The Compose broker is intentionally loopback-only; production or LAN hardware should use a private TLS broker and broker credentials.
+- The ESP32 sketch is compiled by CI and exercised through contract tests, but it has not been bench-tested against the physical feeder.
+- The RAM telemetry queue tolerates short outages but does not survive device power loss.
 
-### 1. Start the backend
-
-```powershell
-cd backend
-
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn main:app --reload
-```
-
-Backend URL:
-
-```text
-http://127.0.0.1:8000
-```
-
-API documentation:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
----
-
-### 2. Start the mock ESP32 telemetry client
-
-Open a second PowerShell window:
-
-```powershell
-cd mock_device
-
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe mock_esp32_client.py
-```
-
-The mock client sends simulated telemetry to the backend every 2 seconds.
-
-Example output:
-
-```text
-temp=4.6C cooling=False pump=IDLE alert=normal
-temp=5.4C cooling=True pump=IDLE alert=warning
-temp=6.2C cooling=True pump=IDLE alert=critical
-```
-
----
-
-### 3. Open the dashboard
-
-Open this file in your browser:
-
-```text
-dashboard/index.html
-```
-
-The dashboard fetches live data from:
-
-```text
-http://127.0.0.1:8000
-```
-
----
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/` | API root and service metadata |
-| `POST` | `/telemetry` | Ingest simulated device telemetry |
-| `GET` | `/telemetry` | Return recent telemetry history |
-| `GET` | `/device-status` | Return the latest device status |
-| `GET` | `/alerts` | Return warning and critical alerts |
-
----
-
-## Example Telemetry Payload
-
-```json
-{
-  "device_uid": "feeder-001",
-  "idempotency_key": "boot-42-reading-1007",
-  "temperature_c": 4.6,
-  "cooling_on": false,
-  "pump_state": "IDLE",
-  "event_type": null
-}
-```
-
-Example response:
-
-```json
-{
-  "id": 1,
-  "temperature_c": 4.6,
-  "cooling_on": false,
-  "pump_state": "IDLE",
-  "event_type": null,
-  "alert_level": "normal",
-  "alert_message": null,
-  "created_at": "2026-07-02T13:00:00Z"
-}
-```
-
----
-
-## Rule-Based Alerts
-
-The backend assigns alert levels based on incoming telemetry:
-
-| Condition | Alert Level | Message |
-|---|---|---|
-| `pump_state == "ERROR"` | Critical | Pump reported an error state |
-| `temperature_c >= 6.0` | Critical | Reservoir temperature is dangerously high |
-| `temperature_c > 5.0` | Warning | Reservoir temperature is above target range |
-| `temperature_c < 2.5` | Warning | Reservoir temperature is below target range |
-| Otherwise | Normal | No active alert |
-
----
-
-## Tech Stack
-
-| Layer | Tools |
-|---|---|
-| Embedded simulation | Arduino, Wokwi |
-| Sensor/control logic | DS18B20, DS1307 RTC, L293D, MOSFET/Peltier control |
-| Backend | FastAPI, Pydantic |
-| Database | SQLite, SQLAlchemy |
-| Mock IoT client | Python, Requests |
-| Frontend dashboard | HTML, CSS, JavaScript, Chart.js |
+These boundaries are documented engineering tradeoffs rather than claims that the prototype is production-certified hardware.

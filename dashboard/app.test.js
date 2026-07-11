@@ -39,19 +39,24 @@ describe("dashboard states", () => {
     const responses = [
       { online: true, temperature_c: 4.25, cooling_on: true, pump_state: "FEEDING", last_seen: "2026-01-01T12:00:00Z", alert_level: "normal", alert_message: null },
       [{ temperature_c: 4.25, created_at: "2026-01-01T12:00:00Z" }],
-      [{ alert_level: "warning", alert_message: "Warm", created_at: "2026-01-01T12:00:00Z" }]
+      [{ level: "warning", category: "TEMPERATURE", message: "Warm", created_at: "2026-01-01T12:00:00Z" }]
     ];
     const fetchImpl = vi.fn().mockImplementation(() => Promise.resolve({ ok: true, json: () => Promise.resolve(responses.shift()) }));
     const chart = { data: { labels: [], datasets: [{ data: [] }] }, update: vi.fn() };
     await refreshDashboard({ documentRef: document, fetchImpl, chart });
     expect(document.getElementById("temperature").textContent).toBe("4.3");
-    expect(document.getElementById("alertLog").textContent).toContain("WARNING: Warm");
+    expect(document.getElementById("alertLog").textContent).toContain("WARNING TEMPERATURE: Warm");
     expect(chart.update).toHaveBeenCalled();
   });
 
   it("starts polling with an available chart", () => {
     document.body.insertAdjacentHTML("beforeend", '<canvas id="tempChart"></canvas>');
-    globalThis.Chart = vi.fn(() => ({ data: { labels: [], datasets: [{ data: [] }] }, update: vi.fn() }));
+    globalThis.Chart = vi.fn(class ChartMock {
+      constructor() {
+        this.data = { labels: [], datasets: [{ data: [] }] };
+        this.update = vi.fn();
+      }
+    });
     vi.spyOn(globalThis, "setInterval").mockReturnValue(42);
     expect(startDashboard(document)).toBe(42);
   });

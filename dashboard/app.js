@@ -21,7 +21,10 @@ export function renderAlerts(element, alerts) {
   }
   for (const alert of alerts) {
     const item = document.createElement("li");
-    item.textContent = `[${formatTime(alert.created_at)}] ${alert.alert_level.toUpperCase()}: ${alert.alert_message}`;
+    const level = alert.level ?? alert.alert_level;
+    const message = alert.message ?? alert.alert_message;
+    const category = alert.category ? ` ${alert.category}:` : ":";
+    item.textContent = `[${formatTime(alert.created_at)}] ${level.toUpperCase()}${category} ${message}`;
     element.appendChild(item);
   }
 }

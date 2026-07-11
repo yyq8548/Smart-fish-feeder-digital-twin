@@ -1,7 +1,7 @@
 import os
 import random
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import requests
 
@@ -44,9 +44,12 @@ def build_payload(cycle: int) -> dict[str, object]:
     return {
         "device_uid": "feeder-001",
         "idempotency_key": f"mock-{cycle}",
+        "sequence_number": cycle,
+        "recorded_at": datetime.now(UTC).isoformat(),
         "temperature_c": round(temperature, 2),
         "cooling_on": cooling_on,
         "pump_state": pump_state,
+        "sensor_status": "OK",
         "event_type": event_type,
     }
 
@@ -62,7 +65,12 @@ def main() -> None:
         payload = build_payload(cycle)
 
         try:
-            response = requests.post(API_URL, json=payload, headers={"X-Device-Key": DEVICE_API_KEY}, timeout=5)
+            response = requests.post(
+                API_URL,
+                json=payload,
+                headers={"X-Device-ID": str(payload["device_uid"]), "X-Device-Key": DEVICE_API_KEY},
+                timeout=5,
+            )
             response.raise_for_status()
             saved = response.json()
 

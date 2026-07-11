@@ -21,6 +21,7 @@ dist/
 build/
 data/
 .pytest_cache/
+.pytest-tmp/
 .coverage
 coverage.xml
 htmlcov/

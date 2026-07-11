@@ -44,6 +44,16 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
 
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - run: arduino-cli core update-index
+      - run: arduino-cli core install esp32:esp32
+      - run: arduino-cli lib install ArduinoJson DallasTemperature OneWire PubSubClient
+      - run: arduino-cli compile --fqbn esp32:esp32:esp32 firmware/esp32_mqtt
+
   security:
     runs-on: ubuntu-latest
     steps:
@@ -52,7 +62,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pip-audit
-      - run: pip-audit -r backend/requirements.txt -r mock_device/requirements.txt
+      - run: pip-audit -r backend/requirements-dev.txt -r mock_device/requirements.txt
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -61,12 +71,14 @@ jobs:
           version: 11
       - run: pnpm install --frozen-lockfile
         working-directory: dashboard
-      - run: pnpm audit --prod
+      - run: pnpm audit
         working-directory: dashboard
 
   containers:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - run: docker compose config
-      - run: docker compose build
+      - run: docker compose config --quiet
+      - name: Build and smoke-test Compose stack
+        run: bash scripts/compose-smoke.sh
