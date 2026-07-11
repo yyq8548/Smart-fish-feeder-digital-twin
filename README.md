@@ -6,15 +6,16 @@
 
 An IoT operations platform built around a real temperature-controlled liquid fish-feeder prototype. The project began with Arduino hardware, a DS18B20 sensor, DS1307 clock, L293D-controlled peristaltic pump, Peltier cooling, and 3D-printed parts. It now includes ESP32 firmware, Wokwi simulation, MQTT transport, authenticated FastAPI services, durable operational records, automated reliability checks, and a browser dashboard.
 
-## Why this is an SDE project
+## Project overview
 
-- 42 backend unit, integration, security, reliability, migration, command-lifecycle, and MQTT-signature tests
-- Frontend tests for live, empty, and failed API states
-- Pull-request CI for Ruff, strict mypy, Pytest, ESLint, Vitest, ESP32 compilation, dependency audits, migrations, Docker builds, and an end-to-end Compose smoke test
-- Per-device credentials stored as keyed hashes, signed MQTT messages, Argon2 operator passwords, JWT login, key rotation, restricted CORS, and rate limiting
-- Idempotent ingestion, monotonic event ordering, timestamp validation, heartbeats, retry handling, and structured JSON request logs
-- Durable devices, schedules, feeding executions, alerts, acknowledgements, and device-command lifecycle records
-- Alembic migrations that create a fresh schema or upgrade the unversioned v3 prototype schema
+- Monitors reservoir temperature, cooling state, pump activity, sensor health, and device connectivity in real time
+- Runs scheduled or manual feeding cycles, reverse-pump cleaning, cooling control, and missed-feeding detection
+- Connects physical ESP32 hardware, the Wokwi simulation, and mock devices through signed MQTT messages or authenticated HTTP telemetry
+- Provides a FastAPI service for device provisioning, key rotation, feeding schedules, remote commands, alerts, acknowledgements, and operational history
+- Stores devices, telemetry, schedules, feeding executions, alerts, and command lifecycle records in SQLite with Alembic-managed schema migrations
+- Handles unreliable IoT delivery with idempotency keys, monotonic event ordering, timestamp validation, heartbeats, bounded retries, and command replay protection
+- Includes a browser dashboard for live status, temperature history, alert activity, API failures, and empty-device states
+- Uses automated backend, frontend, firmware, security, migration, and full-stack container checks to verify the complete system
 
 ## Architecture
 
