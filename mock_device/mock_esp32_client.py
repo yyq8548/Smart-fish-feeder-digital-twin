@@ -1,10 +1,12 @@
+import os
 import random
 import time
 from datetime import datetime
 
 import requests
 
-API_URL = "http://127.0.0.1:8000/telemetry"
+API_URL = os.getenv("API_URL", "http://127.0.0.1:8000/telemetry")
+DEVICE_API_KEY = os.getenv("DEVICE_API_KEY", "local-development-key")
 
 TEMP_LOW = 3.0
 TEMP_HIGH = 5.0
@@ -26,7 +28,7 @@ def get_pump_state(cycle: int) -> tuple[str, str | None]:
     return "IDLE", None
 
 
-def build_payload(cycle: int) -> dict:
+def build_payload(cycle: int) -> dict[str, object]:
     global temperature
 
     drift = random.uniform(-0.25, 0.35)
@@ -40,6 +42,8 @@ def build_payload(cycle: int) -> dict:
     pump_state, event_type = get_pump_state(cycle)
 
     return {
+        "device_uid": "feeder-001",
+        "idempotency_key": f"mock-{cycle}",
         "temperature_c": round(temperature, 2),
         "cooling_on": cooling_on,
         "pump_state": pump_state,
@@ -47,7 +51,7 @@ def build_payload(cycle: int) -> dict:
     }
 
 
-def main():
+def main() -> None:
     print("Mock ESP32 telemetry client started.")
     print(f"Posting telemetry to {API_URL}")
     print("Press Ctrl+C to stop.")
@@ -58,7 +62,7 @@ def main():
         payload = build_payload(cycle)
 
         try:
-            response = requests.post(API_URL, json=payload, timeout=5)
+            response = requests.post(API_URL, json=payload, headers={"X-Device-Key": DEVICE_API_KEY}, timeout=5)
             response.raise_for_status()
             saved = response.json()
 

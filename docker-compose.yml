@@ -1,0 +1,51 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      FISH_FEEDER_DATABASE_URL: sqlite:////app/data/fish_feeder.db
+      FISH_FEEDER_DEVICE_API_KEY: ${FISH_FEEDER_DEVICE_API_KEY:-local-development-key}
+      FISH_FEEDER_CORS_ORIGINS: http://localhost:8080
+    volumes:
+      - feeder-data:/app/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "8080:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    command: mosquitto -c /mosquitto-no-auth.conf
+    ports:
+      - "1883:1883"
+    healthcheck:
+      test: ["CMD", "mosquitto_sub", "-h", "127.0.0.1", "-t", "$SYS/broker/version", "-C", "1", "-W", "3"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mqtt-bridge:
+    build: ./mock_device
+    command: python mqtt_bridge.py
+    environment:
+      API_URL: http://backend:8000/telemetry
+      DEVICE_API_KEY: ${FISH_FEEDER_DEVICE_API_KEY:-local-development-key}
+      MQTT_HOST: mqtt
+    depends_on:
+      backend:
+        condition: service_healthy
+      mqtt:
+        condition: service_healthy
+
+volumes:
+  feeder-data:
