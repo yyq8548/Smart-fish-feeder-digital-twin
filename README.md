@@ -225,8 +225,3 @@ docker-compose.yml             Complete local demonstration stack
 docker-compose.production.yml  HTTPS and MQTT/TLS production stack
 ```
 
-## Current physical boundary
-
-The cloud service, dashboard, containers, automated tests, and both ESP32 firmware variants are implemented and pass CI. The firmware has not yet been commissioned against the final physical feeder assembly. A real installation still requires a VPS/domain, production credentials, ESP32 flashing, wiring, temperature calibration, unloaded actuator tests, and supervised safety validation.
-
-The original Arduino Mega remains an offline prototype. Direct online control uses the ESP32 firmware or requires an ESP32/network gateway.
