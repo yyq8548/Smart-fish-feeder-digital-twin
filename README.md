@@ -1,85 +1,96 @@
-# Smart Fish Feeder Digital Twin v4
+# Smart Fish Feeder Physical Control Board
 
-[![CI](https://github.com/yyq8548/Smart-fish-feeder-digital-twin/actions/workflows/ci.yml/badge.svg)](https://github.com/yyq8548/Smart-fish-feeder-digital-twin/actions/workflows/ci.yml)
+[![CI](https://github.com/yyq8548/Smart-fish-feeder-digital-control/actions/workflows/ci.yml/badge.svg)](https://github.com/yyq8548/Smart-fish-feeder-digital-control/actions/workflows/ci.yml)
 ![Backend coverage](https://img.shields.io/badge/backend%20coverage-92%25-brightgreen)
 ![Frontend line coverage](https://img.shields.io/badge/frontend%20line%20coverage-95%25-brightgreen)
 
-An IoT operations platform built around a real temperature-controlled liquid fish-feeder prototype. The project began with Arduino hardware, a DS18B20 sensor, DS1307 clock, L293D-controlled peristaltic pump, Peltier cooling, and 3D-printed parts. It now includes ESP32 firmware, Wokwi simulation, MQTT transport, authenticated FastAPI services, durable operational records, automated reliability checks, and a browser dashboard.
+An authenticated online control board for monitoring and operating a physical ESP32 fish feeder. Operators can view live reservoir telemetry, feed fish, reverse-clean the pump, change cooling behavior, investigate alerts, and confirm the result of every device command from a browser.
 
-## Project overview
+The dashboard is not a disconnected mockup. Each control creates a durable backend command that is signed, delivered over MQTT/TLS, checked by the ESP32, executed through GPIO-connected hardware, and reported back to the dashboard.
 
-- Monitors reservoir temperature, cooling state, pump activity, sensor health, and device connectivity in real time
-- Runs scheduled or manual feeding cycles, reverse-pump cleaning, cooling control, and missed-feeding detection
-- Connects physical ESP32 hardware, the Wokwi simulation, and mock devices through signed MQTT messages or authenticated HTTP telemetry
-- Provides a FastAPI service for device provisioning, key rotation, feeding schedules, remote commands, alerts, acknowledgements, and operational history
-- Stores devices, telemetry, schedules, feeding executions, alerts, and command lifecycle records in SQLite with Alembic-managed schema migrations
-- Handles unreliable IoT delivery with idempotency keys, monotonic event ordering, timestamp validation, heartbeats, bounded retries, and command replay protection
-- Includes an authenticated browser control board for selected-device telemetry, alert activity, command history, and confirmed feed, clean, and cooling controls
-- Uses automated backend, frontend, firmware, security, migration, and full-stack container checks to verify the complete system
+## Control-board demo
 
-## Architecture
+### Live physical-device status
 
-```text
-Physical ESP32 / Wokwi ESP32 / Mock client
-                  |
-             MQTT or HTTP
-                  v
-          Mosquitto + bridge
-                  |
-      authenticated / idempotent
-                  v
-             FastAPI v4
-       +----------+----------+
-       |                     |
-  SQLAlchemy/Alembic     JSON logs + alerts
-       |                     |
-  persistent SQLite     reliability scanner
-       |
-       v
- Nginx dashboard + REST/Swagger API
-```
+The selected feeder reports its temperature, cooling output, pump state, connection status, and recent telemetry to the control board.
 
-## Implemented capabilities
+![Authenticated control board showing a connected feeder](docs/images/control-board-overview.png)
 
-### Device and telemetry
+### Physical controls and command results
 
-- Wokwi-compatible ESP32 firmware using WiFi, PubSubClient, and DS18B20
-- Cooling hysteresis, scheduled/manual feeding, and reverse-pump cleaning
-- MQTT-to-HTTP bridge with bounded exponential retry
-- Versioned, full-payload HMAC-SHA256 signatures prevent an untrusted broker client from changing sensor or feeding data before the bridge authenticates it
-- Per-device API keys, sequence numbers, idempotency keys, UTC event time, and sensor health
-- Duplicate delivery protection and explicit rejection of stale, future, or out-of-order telemetry
+`Feed now`, `Clean pump`, and cooling-mode controls are enabled only while the selected device is online. The audit trail shows commands that the device claimed and completed.
 
-### Operations
+![Physical controls and completed command history](docs/images/control-board-demo.png)
 
-- Device provisioning and credential rotation
-- Feeding-schedule CRUD with IANA timezones and configurable grace periods; date-scoped idempotency limits each schedule to one command per local day
-- Feeding execution history and automatic missed-feeding detection
-- Durable temperature, pump, sensor, offline, and missed-feeding alerts
-- Operator alert acknowledgement
-- `FEED_NOW`, `CLEAN_PUMP`, and `SET_COOLING` command lifecycle APIs with typed/size-bounded payloads, idempotency keys, atomic claims, short delivery deadlines, expiring leases, signed MQTT delivery, and signed completion results
-- Online-device interlocks and a 500–60,000 ms duration range prevent the web console from queuing stale manual actuation; the forward-feed and standalone clean phases default to 1,000 ms
-- Reboot-safe command replay protection: the ESP32 persists the highest accepted command ID in NVS before physical actuation
+Additional demos:
 
-### Delivery and verification
-
-- Non-root backend, dashboard, and bridge containers
-- Database volume and service health checks
-- Production profile with HTTPS, TLS MQTT, per-device broker ACLs, automatic certificates, strong-secret validation, and no public backend/broker plaintext ports
-- Full-stack Compose smoke test covering migrations, login, device provisioning, invalid credentials, HTTP ingestion, MQTT delivery, dashboard serving, and Nginx API proxying
-- Python and JavaScript vulnerability audits on every pull request
-- 47 backend tests, 13 focused MQTT transport/bridge tests, and 20 frontend tests
-
-## Demos
-
-- [Original physical prototype video](https://drive.google.com/file/d/1-BNHRS8WrIlX6UmlVeAYz3xfRProdbw3/view?usp=sharing)
-- [Original Arduino/Wokwi control simulation](https://wokwi.com/projects/468425567572330497)
+- [Original physical feeder prototype](https://drive.google.com/file/d/1-BNHRS8WrIlX6UmlVeAYz3xfRProdbw3/view?usp=sharing)
+- [Original Arduino/Wokwi simulation](https://wokwi.com/projects/468425567572330497)
 - [ESP32 MQTT simulation instructions](simulation/esp32-mqtt/README.md)
 
-![Dashboard showing live telemetry](docs/images/dashboard.png)
-![Dashboard showing alerts](docs/images/alerts.png)
+## What the control board operates
 
-## One-command setup
+| Dashboard action | Cloud command | ESP32 physical behavior | Reported result |
+| --- | --- | --- | --- |
+| Feed now | `FEED_NOW` | Runs the pump forward, pauses, then reverses it to clean the tube | Completed or failed feeding cycle |
+| Clean pump | `CLEAN_PUMP` | Runs the peristaltic pump in reverse | Completed or failed cleaning cycle |
+| Automatic cooling | `SET_COOLING: AUTO` | Uses the 3–5°C temperature hysteresis | Active automatic mode |
+| Force cooling on | `SET_COOLING: FORCED_ON` | Activates the cooling driver | Output enabled |
+| Force cooling off | `SET_COOLING: FORCED_OFF` | Deactivates the cooling driver | Output disabled |
+
+The ESP32 firmware maps those actions to the physical feeder:
+
+| ESP32 pin | Connected component | Purpose |
+| --- | --- | --- |
+| GPIO 4 | DS18B20 | Reservoir temperature |
+| GPIO 18 | Local feed button | Offline/manual feed input |
+| GPIO 25 | Cooling driver | Peltier or cooling relay control |
+| GPIO 26 | Pump driver forward | Dispense direction |
+| GPIO 27 | Pump driver reverse | Tube-cleaning direction |
+| GPIO 33 | Pump enable | Motor-driver enable |
+
+See the [complete wiring guide](docs/wiring.md#networked-esp32-control-wiring) before connecting powered hardware.
+
+## Physical-to-cloud command path
+
+```text
+Operator browser
+    |
+    | HTTPS + short-lived JWT
+    v
+FastAPI control service -----> SQLite command and audit records
+    |
+    | pending command
+    v
+MQTT bridge -----> Mosquitto TLS broker -----> ESP32
+                                              |
+                                              | GPIO
+                                              v
+                              Pump, cooling driver, sensor
+
+ESP32 ---- signed telemetry and result ----> MQTT bridge ----> FastAPI
+                                                              |
+                                                              v
+                                                       Updated dashboard
+```
+
+Commands are short-lived and non-retained. The ESP32 verifies their HMAC-SHA256 signature, expiry time, and monotonic command ID before operating the hardware. It stores the accepted command watermark in NVS so a reboot cannot replay an old feed instruction.
+
+## Safety behavior
+
+- Manual actuator controls are disabled when the device is offline.
+- Every physical command requires operator confirmation.
+- Feed and clean durations are limited to 500–60,000 ms by both the dashboard and API.
+- Manual commands expire after 45 seconds by default instead of waiting indefinitely for a disconnected device.
+- MQTT commands use QoS 1 but are not retained by the broker.
+- Duplicate telemetry and commands are safe through idempotency and replay protection.
+- Invalid signatures, stale timestamps, expired commands, and out-of-order events are rejected.
+- Sensor failure turns automatic cooling off and generates an alert.
+- The physical feed button remains available without the cloud dashboard.
+
+Software safeguards do not replace electrical protection, motor-current limits, fuses, isolation, or supervised physical commissioning.
+
+## Run the complete local demo
 
 Requirements: Docker with Compose v2.
 
@@ -88,92 +99,87 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Then open:
+Open:
 
-- Dashboard: <http://localhost:8080>
-- API: <http://localhost:8000>
+- Control board: <http://localhost:8080>
+- FastAPI: <http://localhost:8000>
 - Swagger UI: <http://localhost:8000/docs>
 
-Sign in to the local control board with `admin` and
-`local-development-admin-password` unless those values were replaced in
-`.env`. Operational reads and all commands require the short-lived operator
-token returned by the login endpoint.
+The default local operator is:
 
-The defaults are for local demonstration only. Host ports bind to loopback, including the anonymous development MQTT broker. Replace every value in `.env` and use an authenticated TLS broker before connecting hardware over a LAN or exposing any service outside your computer.
+```text
+username: admin
+password: local-development-admin-password
+```
 
-Run the exact end-to-end CI smoke test locally with:
+These credentials and the anonymous loopback MQTT configuration are only for a local demonstration. Never expose the development Compose profile to a network or connect production hardware with its default secrets.
+
+Run the same end-to-end smoke test used by CI:
 
 ```bash
 bash scripts/compose-smoke.sh
 ```
 
-## Online control of a physical feeder
+## Connect a physical ESP32
 
-The production profile exposes the dashboard/API over HTTPS and a
-device-authenticated MQTT endpoint over TLS port 8883 while keeping the API,
-dashboard container, bridge, and plaintext broker listener private:
+1. Copy `firmware/esp32_mqtt/feeder_secrets.example.h` to `firmware/esp32_mqtt/feeder_secrets.h`.
+2. Configure Wi-Fi, MQTT hostname, port `8883`, device username/password, root CA, device UID, and shared signing secret.
+3. Deploy the production cloud stack and provision the matching device credentials.
+4. Compile and flash `firmware/esp32_mqtt/esp32_mqtt.ino`.
+5. Commission the sensor first, then low-voltage outputs, and finally the unloaded pump/cooling hardware.
+6. Confirm telemetry appears before enabling any dashboard actuator.
+7. Test each control with the mechanism unloaded and supervised.
+
+Follow the [physical commissioning checklist](docs/physical_commissioning.md) for the required firmware-first upgrade order and failure tests.
+
+## Production cloud deployment
+
+The production profile places the control board and API behind HTTPS and exposes only the authenticated MQTT/TLS listener on port `8883`. Backend, dashboard, bridge, database, and plaintext broker traffic stay on private Docker networks.
 
 ```bash
 cp .env.production.example .env.production
 chmod 600 .env.production
-docker compose --env-file .env.production -f docker-compose.production.yml config --quiet
-docker compose --env-file .env.production -f docker-compose.production.yml up -d --build
+
+docker compose \
+  --env-file .env.production \
+  -f docker-compose.production.yml \
+  config --quiet
+
+docker compose \
+  --env-file .env.production \
+  -f docker-compose.production.yml \
+  up -d --build
 ```
 
-Before deploying, follow [the single-VPS cloud guide](docs/cloud_deployment.md).
-Before connecting the pump or Peltier module, follow [the ESP32 wiring map](docs/wiring.md#networked-esp32-control-wiring)
-and [physical commissioning procedure](docs/physical_commissioning.md). The
-original Arduino Mega sketch remains an offline prototype; the active cloud
-path requires the ESP32 firmware.
+Before deployment, replace every placeholder with unique high-entropy values, configure the dashboard and MQTT DNS records, and follow the [single-VPS cloud deployment guide](docs/cloud_deployment.md).
 
-## Local backend development
+## Main capabilities
 
-```powershell
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt -r mock_device\requirements.txt
+### Device monitoring
 
-cd backend
-..\.venv\Scripts\alembic.exe upgrade head
-..\.venv\Scripts\python.exe -m uvicorn main:app --reload
-```
+- Ordered temperature, cooling, pump, sensor-health, and heartbeat telemetry
+- Live online/offline state and last-seen time
+- Local canvas temperature chart without third-party browser scripts
+- Durable temperature, sensor, pump, offline, and missed-feeding alerts
+- Operator alert acknowledgement and operational history
 
-Start the direct HTTP simulator in another terminal:
+### Remote operation
 
-```powershell
-$env:DEVICE_API_KEY = "local-development-key"
-.\.venv\Scripts\python.exe mock_device\mock_esp32_client.py
-```
+- Immediate feeding and reverse-pump cleaning
+- Automatic, forced-on, and forced-off cooling modes
+- IANA-timezone feeding schedules and missed-feeding detection
+- Pending, claimed, completed, failed, and expired command states
+- Device command leases, completion grace periods, and audit records
 
-## Authentication workflow
+### Security and reliability
 
-Operators authenticate at `POST /auth/token`. A bearer token is required to read operational telemetry/status/alerts, provision devices, rotate keys, manage schedules, acknowledge alerts, issue commands, and run an immediate reliability scan.
-
-Devices send both headers on ingestion and command calls. The bridge supports one device through `DEVICE_UID`/`DEVICE_API_KEY` or multiple explicitly allowlisted devices through matching `DEVICE_CREDENTIALS_JSON` and `MQTT_SHARED_SECRETS_JSON` maps. Compose passes these values through from `.env`:
-
-```text
-X-Device-ID: feeder-001
-X-Device-Key: <device key>
-```
-
-Provisioned device keys are returned once; only a keyed SHA-256 digest is stored. Operator passwords are hashed with Argon2.
-
-## Telemetry contract
-
-```json
-{
-  "device_uid": "feeder-001",
-  "idempotency_key": "mqtt-a1b2c3d4-1783773296000123",
-  "sequence_number": 1783773296000123,
-  "recorded_at": "2026-07-11T12:34:56Z",
-  "temperature_c": 4.6,
-  "cooling_on": false,
-  "pump_state": "IDLE",
-  "sensor_status": "OK",
-  "event_type": "heartbeat"
-}
-```
-
-When the temperature sensor is disconnected, `temperature_c` is `null` and `sensor_status` is `DISCONNECTED`; the backend creates a critical durable alert.
+- Argon2 operator passwords and short-lived JWT sessions
+- Per-device API and MQTT credentials
+- HMAC-SHA256 telemetry, command, and result signatures
+- TLS certificate and hostname verification
+- Per-device MQTT topic ACLs
+- Rate limiting, timestamp validation, monotonic ordering, and idempotency
+- ESP32 NVS replay protection and command-result resend behavior
 
 ## Main APIs
 
@@ -185,46 +191,42 @@ When the temperature sensor is disconnected, `temperature_c` is `null` and `sens
 | Schedules | `POST/GET /devices/{uid}/schedules`, `PATCH/DELETE /schedules/{id}` |
 | Operations | `GET /feeding-executions`, `GET /alerts`, `POST /alerts/{id}/acknowledge` |
 | Commands | `POST/GET /devices/{uid}/commands`, `POST /device-commands/claim`, `POST /device-commands/{id}/complete` |
-| Reliability | `POST /reliability/scan` plus automatic schedule dispatch and missed/offline scanning |
+| Reliability | `POST /reliability/scan` plus automatic schedule and offline scanning |
 
-## Quality gates
+## Automated verification
 
-```powershell
-.\.venv\Scripts\ruff.exe format --check .
-.\.venv\Scripts\ruff.exe check .
-.\.venv\Scripts\mypy.exe
-.\.venv\Scripts\pytest.exe
-.\.venv\Scripts\pip-audit.exe -r backend\requirements-dev.txt -r mock_device\requirements.txt
+GitHub Actions runs the following on every pull request:
 
-cd dashboard
-pnpm install --frozen-lockfile
-pnpm lint
-pnpm test
-pnpm audit
-```
+- Ruff formatting and linting
+- Strict mypy type checking
+- 60 Python backend and MQTT transport tests
+- 20 dashboard tests with API failure and empty-state coverage
+- Python and JavaScript dependency vulnerability audits
+- Plaintext and verified-TLS ESP32 firmware compilation
+- Development and production Docker configuration validation
+- Complete Docker Compose build and end-to-end smoke test
+
+Current measured coverage is 91.57% for the Python backend and 94.63% line coverage for the dashboard.
 
 ## Repository map
 
 ```text
-backend/                 FastAPI app, Alembic migrations, tests, Dockerfile
-dashboard/               Nginx-served JavaScript dashboard and Vitest suite
-firmware/esp32_mqtt/     Networked ESP32 firmware
-firmware/sketch.ino      Preserved original Arduino Mega firmware
-simulation/esp32-mqtt/   Wokwi ESP32 wiring and setup
-mock_device/             HTTP simulator and MQTT-to-HTTP bridge
-scripts/                 End-to-end Compose smoke test
-deploy/                  Production proxy, broker ACL, and startup validation
-docs/                    Architecture, API, deployment, wiring, and commissioning notes
-docker-compose.yml       Complete local system
-docker-compose.production.yml  HTTPS + TLS-MQTT single-VPS profile
+backend/                       FastAPI service, database, migrations, tests
+dashboard/                     Browser control board and frontend tests
+firmware/esp32_mqtt/           Physical ESP32 MQTT/TLS firmware
+firmware/sketch.ino            Preserved original Arduino Mega prototype
+mock_device/                   Device simulator and MQTT-to-HTTP bridge
+simulation/esp32-mqtt/         Wokwi ESP32 setup
+deploy/                        Production proxy, broker, ACL, and health files
+docs/cloud_deployment.md       VPS, DNS, TLS, secrets, and operations guide
+docs/wiring.md                 ESP32-to-hardware wiring map
+docs/physical_commissioning.md Safe physical bring-up procedure
+docker-compose.yml             Complete local demonstration stack
+docker-compose.production.yml  HTTPS and MQTT/TLS production stack
 ```
 
-## Honest deployment boundaries
+## Current physical boundary
 
-- SQLite and the in-process rate limiter fit a small single-instance deployment; a horizontally scaled deployment should use PostgreSQL and a shared Redis-backed limiter.
-- The public MQTT settings in the Wokwi guide are for nonsensitive demos. The Compose broker is intentionally loopback-only; production or LAN hardware should use a private TLS broker and broker credentials.
-- The ESP32 sketch is compiled by CI and exercised through contract tests, but it has not been bench-tested against the physical feeder.
-- The RAM telemetry queue tolerates short outages but does not survive device power loss.
-- The production profile is a single-VPS design without automatic failover.
+The cloud service, dashboard, containers, automated tests, and both ESP32 firmware variants are implemented and pass CI. The firmware has not yet been commissioned against the final physical feeder assembly. A real installation still requires a VPS/domain, production credentials, ESP32 flashing, wiring, temperature calibration, unloaded actuator tests, and supervised safety validation.
 
-These boundaries are documented engineering tradeoffs rather than claims that the prototype is production-certified hardware.
+The original Arduino Mega remains an offline prototype. Direct online control uses the ESP32 firmware or requires an ESP32/network gateway.
