@@ -317,6 +317,8 @@ describe("operator controller", () => {
     document.querySelector("[name='password']").value = "password";
     document.getElementById("loginForm").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(document.body.dataset.authenticated).toBe("true"));
+    expect(document.getElementById("loginForm").hidden).toBe(true);
+    expect(document.getElementById("operatorSession").hidden).toBe(false);
     expect(document.getElementById("operatorUsername").textContent).toBe("alice");
     expect(document.querySelector("[data-command='FEED_NOW']").disabled).toBe(false);
 
