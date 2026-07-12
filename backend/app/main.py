@@ -109,7 +109,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await worker
 
 
-app = FastAPI(title="Smart Fish Feeder Digital Twin API", version="4.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Smart Fish Feeder Digital Twin API",
+    version="4.0.0",
+    root_path=settings.root_path,
+    lifespan=lifespan,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
@@ -156,6 +161,16 @@ def get_device_or_404(db: Session, device_uid: str) -> Device:
     return device
 
 
+def device_is_online(device: Device, now: datetime | None = None) -> bool:
+    last_seen = device.last_seen_at
+    if last_seen is None:
+        return False
+    if last_seen.tzinfo is None:
+        last_seen = last_seen.replace(tzinfo=UTC)
+    current = now or datetime.now(UTC)
+    return (current - last_seen).total_seconds() <= settings.offline_after_seconds
+
+
 def telemetry_payload_hash(payload: TelemetryIn) -> str:
     canonical = {
         "cooling_on": payload.cooling_on,
@@ -175,7 +190,11 @@ def telemetry_payload_hash(payload: TelemetryIn) -> str:
 
 @app.get("/")
 def root() -> dict[str, str]:
-    return {"service": "Smart Fish Feeder Digital Twin API", "version": "4.0.0", "docs": "/docs"}
+    return {
+        "service": "Smart Fish Feeder Digital Twin API",
+        "version": "4.0.0",
+        "docs": f"{settings.root_path}/docs",
+    }
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -425,6 +444,7 @@ def list_telemetry(
     limit: int = Query(50, ge=1, le=500),
     device_uid: str | None = None,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> list[TelemetryRecord]:
     query = select(TelemetryRecord).order_by(desc(TelemetryRecord.created_at)).limit(limit)
     if device_uid:
@@ -435,7 +455,11 @@ def list_telemetry(
 
 
 @app.get("/device-status", response_model=DeviceStatus)
-def get_device_status(device_uid: str = "feeder-001", db: Session = Depends(get_db)) -> DeviceStatus:
+def get_device_status(
+    device_uid: str = "feeder-001",
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> DeviceStatus:
     device = db.scalar(select(Device).where(Device.device_uid == device_uid))
     latest = (
         None
@@ -460,10 +484,7 @@ def get_device_status(device_uid: str = "feeder-001", db: Session = Depends(get_
             last_sequence_number=None,
             last_seen=None,
         )
-    last_seen = device.last_seen_at
-    if last_seen is not None and last_seen.tzinfo is None:
-        last_seen = last_seen.replace(tzinfo=UTC)
-    online = last_seen is not None and (datetime.now(UTC) - last_seen).total_seconds() <= settings.offline_after_seconds
+    online = device_is_online(device)
     return DeviceStatus(
         device_uid=device_uid,
         online=online,
@@ -571,21 +592,31 @@ def delete_schedule(
 @app.get("/feeding-executions", response_model=list[FeedingExecutionOut])
 def list_feeding_executions(
     limit: int = Query(50, ge=1, le=500),
+    device_uid: str | None = None,
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[FeedingExecution]:
-    return list(db.scalars(select(FeedingExecution).order_by(desc(FeedingExecution.created_at)).limit(limit)))
+    query = select(FeedingExecution).order_by(desc(FeedingExecution.created_at)).limit(limit)
+    if device_uid:
+        device = get_device_or_404(db, device_uid)
+        query = query.where(FeedingExecution.device_id == device.id)
+    return list(db.scalars(query))
 
 
 @app.get("/alerts", response_model=list[AlertOut])
 def list_alerts(
     limit: int = Query(20, ge=1, le=100),
     unacknowledged_only: bool = False,
+    device_uid: str | None = None,
     db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
 ) -> list[Alert]:
     query = select(Alert).order_by(desc(Alert.created_at)).limit(limit)
     if unacknowledged_only:
         query = query.where(Alert.acknowledged_at.is_(None))
+    if device_uid:
+        device = get_device_or_404(db, device_uid)
+        query = query.where(Alert.device_id == device.id)
     return list(db.scalars(query))
 
 
@@ -614,6 +645,14 @@ def create_command(
     user: User = Depends(get_current_user),
 ) -> DeviceCommand:
     device = get_device_or_404(db, device_uid)
+    now = datetime.now(UTC)
+    actuation_commands = {"FEED_NOW", "CLEAN_PUMP", "SET_COOLING"}
+    if (
+        settings.require_online_for_actuation
+        and payload.command_type in actuation_commands
+        and not device_is_online(device, now)
+    ):
+        raise HTTPException(status_code=409, detail="Device is offline; refusing an actuation command")
     payload_json = json.dumps(payload.payload, separators=(",", ":"), sort_keys=True)
     existing = db.scalar(
         select(DeviceCommand).where(
@@ -631,6 +670,7 @@ def create_command(
         command_type=payload.command_type,
         payload_json=payload_json,
         requested_by_user_id=user.id,
+        expires_at=now + timedelta(seconds=settings.manual_command_ttl_seconds),
     )
     db.add(command)
     try:
@@ -679,11 +719,41 @@ def claim_commands(
     device = get_device_or_401(db, x_device_id, x_device_key)
     now = datetime.now(UTC)
     lease_expires_at = now + timedelta(seconds=settings.command_lease_seconds)
+    db.execute(
+        update(DeviceCommand)
+        .where(
+            DeviceCommand.device_id == device.id,
+            DeviceCommand.expires_at.is_(None),
+            DeviceCommand.status.in_(("PENDING", "CLAIMED")),
+        )
+        .values(status="EXPIRED", completed_at=now, result="missing_delivery_deadline")
+    )
+    db.execute(
+        update(DeviceCommand)
+        .where(
+            DeviceCommand.device_id == device.id,
+            DeviceCommand.expires_at.is_not(None),
+            DeviceCommand.expires_at <= now,
+            DeviceCommand.status == "PENDING",
+        )
+        .values(status="EXPIRED", completed_at=now, result="expired_before_delivery")
+    )
+    db.execute(
+        update(DeviceCommand)
+        .where(
+            DeviceCommand.device_id == device.id,
+            DeviceCommand.expires_at.is_not(None),
+            DeviceCommand.expires_at <= now - timedelta(seconds=settings.command_result_grace_seconds),
+            DeviceCommand.status == "CLAIMED",
+        )
+        .values(status="EXPIRED", completed_at=now, result="terminal_result_timeout_after_claim")
+    )
     eligible_ids = list(
         db.scalars(
             select(DeviceCommand.id)
             .where(
                 DeviceCommand.device_id == device.id,
+                DeviceCommand.expires_at > now,
                 or_(
                     DeviceCommand.status == "PENDING",
                     (DeviceCommand.status == "CLAIMED") & (DeviceCommand.lease_expires_at < now),
@@ -699,6 +769,8 @@ def claim_commands(
             update(DeviceCommand)
             .where(
                 DeviceCommand.id == command_id,
+                DeviceCommand.expires_at.is_not(None),
+                DeviceCommand.expires_at > now,
                 or_(
                     DeviceCommand.status == "PENDING",
                     (DeviceCommand.status == "CLAIMED") & (DeviceCommand.lease_expires_at < now),
@@ -738,7 +810,9 @@ def complete_command(
                 db.commit()
             return command
         raise HTTPException(status_code=409, detail="Command already has a terminal result")
-    if command.status != "CLAIMED":
+    if command.status == "EXPIRED" and command.claimed_at is None:
+        raise HTTPException(status_code=409, detail="Command expired before delivery")
+    if command.status not in {"CLAIMED", "EXPIRED"}:
         raise HTTPException(status_code=409, detail="Command is not in CLAIMED state")
     completed_at = datetime.now(UTC)
     command.status = payload.status

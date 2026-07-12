@@ -4,9 +4,12 @@ import hashlib
 import hmac
 import json
 import os
+import ssl
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Protocol
 
 import paho.mqtt.client as mqtt
 import requests
@@ -21,6 +24,92 @@ DEVICE_UID = os.getenv("DEVICE_UID", "feeder-001")
 DEVICE_API_KEY = os.getenv("DEVICE_API_KEY", "local-development-key")
 MQTT_SHARED_SECRET = os.getenv("MQTT_SHARED_SECRET", "local-development-mqtt-secret")
 COMMAND_POLL_SECONDS = float(os.getenv("COMMAND_POLL_SECONDS", "2"))
+MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "fish-feeder-http-bridge")
+
+
+@dataclass(frozen=True)
+class MqttTransportConfig:
+    """Broker authentication and TLS settings loaded at bridge startup."""
+
+    use_tls: bool
+    tls_insecure: bool
+    ca_file: str | None
+    client_cert_file: str | None
+    client_key_file: str | None
+    username: str | None
+    password: str | None
+
+
+class MqttClientConfigurator(Protocol):
+    def username_pw_set(self, username: str, password: str | None = None) -> None: ...
+
+    def tls_set_context(self, context: ssl.SSLContext | None = None) -> None: ...
+
+
+def _load_bool(variable: str, default: bool = False) -> bool:
+    raw = os.getenv(variable)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{variable} must be one of true/false, 1/0, yes/no, or on/off")
+
+
+def load_mqtt_transport_config() -> MqttTransportConfig:
+    use_tls = _load_bool("MQTT_TLS_ENABLED")
+    tls_insecure = _load_bool("MQTT_TLS_INSECURE")
+    ca_file = os.getenv("MQTT_TLS_CA_FILE") or None
+    client_cert_file = os.getenv("MQTT_TLS_CERT_FILE") or None
+    client_key_file = os.getenv("MQTT_TLS_KEY_FILE") or None
+    username = os.getenv("MQTT_USERNAME") or None
+    password = os.getenv("MQTT_PASSWORD") or None
+
+    if password is not None and username is None:
+        raise ValueError("MQTT_PASSWORD requires MQTT_USERNAME")
+    if (client_cert_file is None) != (client_key_file is None):
+        raise ValueError("MQTT_TLS_CERT_FILE and MQTT_TLS_KEY_FILE must be configured together")
+    if not use_tls and (tls_insecure or ca_file or client_cert_file or client_key_file):
+        raise ValueError("MQTT TLS options require MQTT_TLS_ENABLED=true")
+
+    return MqttTransportConfig(
+        use_tls=use_tls,
+        tls_insecure=tls_insecure,
+        ca_file=ca_file,
+        client_cert_file=client_cert_file,
+        client_key_file=client_key_file,
+        username=username,
+        password=password,
+    )
+
+
+def build_mqtt_ssl_context(config: MqttTransportConfig) -> ssl.SSLContext:
+    if not config.use_tls:
+        raise ValueError("Cannot build an MQTT TLS context when TLS is disabled")
+
+    if config.tls_insecure:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    else:
+        # With no explicit CA file, Python's trusted system CA store is used.
+        context = ssl.create_default_context(cafile=config.ca_file)
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    if config.client_cert_file is not None and config.client_key_file is not None:
+        context.load_cert_chain(config.client_cert_file, config.client_key_file)
+    return context
+
+
+def configure_mqtt_transport(client: MqttClientConfigurator, config: MqttTransportConfig) -> None:
+    if config.username is not None:
+        client.username_pw_set(config.username, config.password)
+    if config.use_tls:
+        client.tls_set_context(build_mqtt_ssl_context(config))
 
 
 def _load_string_map(variable: str, fallback_key: str, fallback_value: str) -> dict[str, str]:
@@ -125,6 +214,64 @@ def verify_result_signature(payload: dict[str, object], secret: str) -> None:
         raise ValueError("Command result signature is invalid")
 
 
+def command_canonical(
+    command_id: int,
+    command_type: str,
+    payload_json: str,
+    expires_at: str | None = None,
+) -> str:
+    canonical = f"{command_id}|{command_type}|{payload_json}"
+    if expires_at is not None:
+        canonical = f"{canonical}|{expires_at}"
+    return canonical
+
+
+def normalize_command_expiry(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Claimed command expires_at must be an ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        # SQLite can return a naive value for a timezone-aware UTC column.
+        parsed = parsed.replace(tzinfo=UTC)
+    else:
+        parsed = parsed.astimezone(UTC)
+    if parsed.year < 1970:
+        raise ValueError("Claimed command expires_at must not predate the Unix epoch")
+    # The ESP32 parser enforces whole-second deadlines. Floor here so the
+    # signed value and the device-side deadline are exactly the same instant.
+    return parsed.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def build_command_message(command: dict[str, object], secret: str) -> dict[str, object]:
+    command_id = command.get("id")
+    command_type = command.get("command_type")
+    payload_json = command.get("payload_json")
+    expires_at = command.get("expires_at")
+    if not isinstance(command_id, int) or isinstance(command_id, bool) or command_id <= 0:
+        raise ValueError("Claimed command requires a positive integer id")
+    if not isinstance(command_type, str) or not command_type:
+        raise ValueError("Claimed command requires a non-empty command_type")
+    if not isinstance(payload_json, str):
+        raise ValueError("Claimed command requires string payload_json")
+    if expires_at is not None and (not isinstance(expires_at, str) or not expires_at):
+        raise ValueError("Claimed command expires_at must be a non-empty string when present")
+    normalized_expiry = normalize_command_expiry(expires_at) if expires_at is not None else None
+
+    message: dict[str, object] = {
+        "command_id": command_id,
+        "command_type": command_type,
+        "payload_json": payload_json,
+        "signature": _digest(
+            secret,
+            command_canonical(command_id, command_type, payload_json, normalized_expiry),
+        ),
+    }
+    if normalized_expiry is not None:
+        message["expires_at"] = normalized_expiry
+    return message
+
+
 def _request_with_retry(
     method: str,
     url: str,
@@ -220,16 +367,7 @@ def publish_pending_commands(client: mqtt.Client) -> None:
             for command in commands:
                 if not isinstance(command, dict):
                     continue
-                command_id = command["id"]
-                command_type = command["command_type"]
-                payload_json = command["payload_json"]
-                canonical = f"{command_id}|{command_type}|{payload_json}"
-                message = {
-                    "command_id": command_id,
-                    "command_type": command_type,
-                    "payload_json": payload_json,
-                    "signature": _digest(MQTT_SHARED_SECRETS[device_uid], canonical),
-                }
+                message = build_command_message(command, MQTT_SHARED_SECRETS[device_uid])
                 result = client.publish(
                     f"{MQTT_TOPIC_PREFIX}/{device_uid}/commands",
                     json.dumps(message, separators=(",", ":")),
@@ -243,9 +381,19 @@ def publish_pending_commands(client: mqtt.Client) -> None:
 
 
 def main() -> None:
-    client = mqtt.Client(CallbackAPIVersion.VERSION2, client_id="fish-feeder-http-bridge")
+    transport_config = load_mqtt_transport_config()
+    client = mqtt.Client(CallbackAPIVersion.VERSION2, client_id=MQTT_CLIENT_ID)
+    configure_mqtt_transport(client, transport_config)
     client.on_connect = on_connect
     client.on_message = on_message
+    if transport_config.use_tls and transport_config.tls_insecure:
+        print(
+            "WARNING: MQTT_TLS_INSECURE disables certificate and hostname verification; "
+            "use only for local development",
+            flush=True,
+        )
+    elif not transport_config.use_tls and transport_config.username is not None:
+        print("WARNING: MQTT credentials are being sent over plaintext MQTT", flush=True)
     client.connect(MQTT_HOST, MQTT_PORT, 60)
     client.loop_start()
     try:

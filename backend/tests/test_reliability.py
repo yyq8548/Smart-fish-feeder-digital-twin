@@ -44,7 +44,7 @@ def test_reliability_scan_creates_missed_feeding_and_offline_alerts(client) -> N
                 name="Overdue feeding",
                 hour=scheduled.hour,
                 minute=scheduled.minute,
-                days_of_week=str(now.weekday()),
+                days_of_week=str(scheduled.weekday()),
                 timezone="UTC",
                 grace_minutes=1,
             )
@@ -79,6 +79,8 @@ def test_due_schedule_dispatches_one_idempotent_feed_command(client) -> None:  #
         command = db.scalar(select(DeviceCommand).where(DeviceCommand.idempotency_key.like("scheduled-feed:%")))
         assert command is not None
         assert command.command_type == "FEED_NOW"
+        assert command.expires_at is not None
+        assert command.expires_at.replace(tzinfo=UTC) == now + timedelta(minutes=schedule.grace_minutes)
         assert f'"schedule_id":{schedule.id}' in command.payload_json
 
 
@@ -98,6 +100,7 @@ def test_expired_command_lease_can_be_reclaimed(client, device_headers) -> None:
                 status="CLAIMED",
                 claimed_at=now - timedelta(minutes=2),
                 lease_expires_at=now - timedelta(minutes=1),
+                expires_at=now + timedelta(minutes=5),
             )
         )
         db.commit()
@@ -105,6 +108,97 @@ def test_expired_command_lease_can_be_reclaimed(client, device_headers) -> None:
     assert reclaimed.status_code == 200
     assert reclaimed.json()[0]["idempotency_key"] == "lease-test"
     assert reclaimed.json()[0]["lease_expires_at"] is not None
+
+
+def test_expired_pending_command_is_not_delivered(client, device_headers) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        device = db.scalar(select(Device).where(Device.device_uid == "feeder-001"))
+        user = db.scalar(select(User).where(User.username == "test-admin"))
+        assert device is not None and user is not None
+        command = DeviceCommand(
+            device_id=device.id,
+            idempotency_key="expired-before-delivery",
+            command_type="FEED_NOW",
+            payload_json="{}",
+            requested_by_user_id=user.id,
+            expires_at=now - timedelta(seconds=1),
+        )
+        db.add(command)
+        db.commit()
+        command_id = command.id
+
+    claimed = client.post("/device-commands/claim", headers=device_headers)
+    assert claimed.status_code == 200
+    assert claimed.json() == []
+    with SessionLocal() as db:
+        expired = db.get(DeviceCommand, command_id)
+        assert expired is not None
+        assert expired.status == "EXPIRED"
+        assert expired.result == "expired_before_delivery"
+
+
+def test_command_without_delivery_deadline_fails_closed(client, device_headers) -> None:  # type: ignore[no-untyped-def]
+    with SessionLocal() as db:
+        device = db.scalar(select(Device).where(Device.device_uid == "feeder-001"))
+        user = db.scalar(select(User).where(User.username == "test-admin"))
+        assert device is not None and user is not None
+        command = DeviceCommand(
+            device_id=device.id,
+            idempotency_key="missing-delivery-deadline",
+            command_type="FEED_NOW",
+            payload_json="{}",
+            requested_by_user_id=user.id,
+        )
+        db.add(command)
+        db.commit()
+        command_id = command.id
+
+    claimed = client.post("/device-commands/claim", headers=device_headers)
+    assert claimed.status_code == 200
+    assert claimed.json() == []
+    with SessionLocal() as db:
+        expired = db.get(DeviceCommand, command_id)
+        assert expired is not None
+        assert expired.status == "EXPIRED"
+        assert expired.result == "missing_delivery_deadline"
+
+
+def test_claimed_command_gets_result_grace_before_timeout(client, device_headers) -> None:  # type: ignore[no-untyped-def]
+    now = datetime.now(UTC)
+    with SessionLocal() as db:
+        device = db.scalar(select(Device).where(Device.device_uid == "feeder-001"))
+        user = db.scalar(select(User).where(User.username == "test-admin"))
+        assert device is not None and user is not None
+        command = DeviceCommand(
+            device_id=device.id,
+            idempotency_key="long-running-command",
+            command_type="FEED_NOW",
+            payload_json='{"duration_ms":60000}',
+            requested_by_user_id=user.id,
+            status="CLAIMED",
+            claimed_at=now - timedelta(seconds=30),
+            lease_expires_at=now - timedelta(seconds=20),
+            expires_at=now - timedelta(seconds=1),
+        )
+        db.add(command)
+        db.commit()
+        command_id = command.id
+
+    assert client.post("/device-commands/claim", headers=device_headers).json() == []
+    with SessionLocal() as db:
+        awaiting_result = db.get(DeviceCommand, command_id)
+        assert awaiting_result is not None
+        assert awaiting_result.status == "CLAIMED"
+        awaiting_result.expires_at = now - timedelta(seconds=91)
+        db.commit()
+
+    assert client.post("/device-commands/claim", headers=device_headers).json() == []
+    with SessionLocal() as db:
+        timed_out = db.get(DeviceCommand, command_id)
+        assert timed_out is not None
+        assert timed_out.status == "EXPIRED"
+        assert timed_out.result == "terminal_result_timeout_after_claim"
 
 
 def test_command_completion_reconciles_started_execution_and_prevents_false_missed_alert(client) -> None:  # type: ignore[no-untyped-def]

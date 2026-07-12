@@ -64,7 +64,13 @@ forwarding telemetry.
 
 The command plane supports `FEED_NOW`, `CLEAN_PUMP`, `SET_COOLING`, and the
 optional configuration-mirror command `SYNC_SCHEDULES`. Command signatures cover
-`command_id|command_type|payload_json`; result signatures cover
+`command_id|command_type|payload_json|expires_at` when the bridge receives an
+expiry from the API; legacy commands without an expiry retain the original
+three-field canonical value. The expiry string is signed exactly as transmitted.
+The ESP32 accepts UTC `Z` or `+00:00` ISO-8601 values, including fractional
+seconds, and refuses an expiring command until NTP has synchronized the clock.
+An already expired valid command is recorded without actuation and receives a
+signed `FAILED` result of `command_expired`. Result signatures cover
 `command_id|status|result`. Feed and clean commands remain in progress until
 the state machine actually finishes or aborts. Before executing any accepted
 command, the ESP32 persists its monotonically increasing ID as an NVS watermark.
@@ -81,11 +87,26 @@ calculation and is the only scheduler: it dispatches `FEED_NOW` with a positive
 ID. A `FEED_NOW` without `schedule_id` remains a manual execution.
 
 Configuration uses `FEEDER_*` compile-time constants. Defaults target Wokwi's
-open `Wokwi-GUEST` network and a public demonstration broker. For physical
-hardware, override the WiFi and MQTT values with build flags or a local secrets
-header that is excluded from version control; do not commit credentials. The
-included shared secret is for local development only and must be replaced with
-a unique high-entropy value before connecting through a public broker.
+open `Wokwi-GUEST` network and a public demonstration broker over plaintext
+port 1883. For physical hardware, copy
+`esp32_mqtt/feeder_secrets.example.h` to `esp32_mqtt/feeder_secrets.h`; the
+destination is ignored by Git and loaded automatically. Do not commit broker,
+WiFi, or HMAC credentials.
+
+For a cloud broker, set `FEEDER_MQTT_USE_TLS=1`, use the broker's TLS port
+(normally 8883), set `FEEDER_MQTT_USERNAME` and `FEEDER_MQTT_PASSWORD`, and put
+the provider's PEM root CA in `FEEDER_MQTT_ROOT_CA`. The ESP32 uses
+`WiFiClientSecure`, waits for NTP before certificate validation, and fails
+closed if verified TLS is selected without a CA. Hostname and certificate
+verification are enabled by default. `FEEDER_MQTT_TLS_INSECURE=1` disables both
+checks and prints a warning; it exists only for a local development broker with
+a temporary self-signed certificate. Never use it on an internet broker.
+
+The included HMAC secret is also for local development only and must be
+replaced with a unique high-entropy value before connecting through a public
+broker. Keep MQTT command publishing non-retained: the bridge already uses
+`retain=false`, backend claims exclude stale commands, and a cloud-broker ACL
+should deny retained writes to the command topic.
 
 See [`../simulation/esp32-mqtt/README.md`](../simulation/esp32-mqtt/README.md)
 for the complete Wokwi-to-backend walkthrough.

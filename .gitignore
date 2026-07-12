@@ -27,3 +27,6 @@ coverage.xml
 htmlcov/
 coverage/
 .env
+.env.*
+!.env.example
+!.env.production.example

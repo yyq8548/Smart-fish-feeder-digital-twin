@@ -5,12 +5,17 @@
 #include <Preferences.h>
 #include <PubSubClient.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <ctype.h>
 #include <esp_system.h>
 #include <math.h>
 #include <mbedtls/md.h>
 #include <sys/time.h>
 #include <time.h>
+
+#if __has_include("feeder_secrets.h")
+#include "feeder_secrets.h"
+#endif
 
 /*
   Smart Fish Feeder Digital Twin - ESP32 MQTT firmware
@@ -38,6 +43,22 @@
 
 #ifndef FEEDER_MQTT_PORT
 #define FEEDER_MQTT_PORT 1883
+#endif
+
+#ifndef FEEDER_MQTT_USE_TLS
+#define FEEDER_MQTT_USE_TLS 0
+#endif
+
+#ifndef FEEDER_MQTT_TLS_INSECURE
+#define FEEDER_MQTT_TLS_INSECURE 0
+#endif
+
+#ifndef FEEDER_MQTT_ROOT_CA
+#define FEEDER_MQTT_ROOT_CA ""
+#endif
+
+#if FEEDER_MQTT_TLS_INSECURE && !FEEDER_MQTT_USE_TLS
+#error "FEEDER_MQTT_TLS_INSECURE requires FEEDER_MQTT_USE_TLS=1"
 #endif
 
 #ifndef FEEDER_MQTT_USERNAME
@@ -149,7 +170,11 @@ struct CommandHistoryEntry {
   char result[96];
 };
 
+#if FEEDER_MQTT_USE_TLS
+WiFiClientSecure networkClient;
+#else
 WiFiClient networkClient;
+#endif
 PubSubClient mqttClient(networkClient);
 OneWire oneWire(TEMP_SENSOR_PIN);
 DallasTemperature temperatureSensor(&oneWire);
@@ -206,6 +231,7 @@ int stableButtonState = HIGH;
 
 bool timeConfigured = false;
 bool startupTelemetryQueued = false;
+bool mqttTransportConfigured = false;
 char mqttTelemetryTopic[128];
 char mqttCommandTopic[128];
 char mqttCommandResultTopic[128];
@@ -663,6 +689,32 @@ void beginWiFiConnection() {
   }
 }
 
+bool configureMqttTransport() {
+  if (strlen(FEEDER_MQTT_PASSWORD) > 0 && strlen(FEEDER_MQTT_USERNAME) == 0) {
+    Serial.println("ERROR FEEDER_MQTT_PASSWORD requires FEEDER_MQTT_USERNAME");
+    return false;
+  }
+
+#if FEEDER_MQTT_USE_TLS
+#if FEEDER_MQTT_TLS_INSECURE
+  networkClient.setInsecure();
+  Serial.println(
+      "WARN MQTT TLS certificate verification disabled; FEEDER_MQTT_TLS_INSECURE is development-only");
+#else
+  if (strlen(FEEDER_MQTT_ROOT_CA) == 0) {
+    Serial.println("ERROR verified MQTT TLS requires FEEDER_MQTT_ROOT_CA");
+    return false;
+  }
+  networkClient.setCACert(FEEDER_MQTT_ROOT_CA);
+  Serial.println("MQTT TLS enabled with CA and hostname verification");
+#endif
+#else
+  Serial.println("WARN MQTT transport is plaintext; use only for Wokwi or a trusted local network");
+#endif
+
+  return true;
+}
+
 void maintainWiFi(uint32_t nowMs) {
   if (WiFi.status() == WL_CONNECTED) {
     if (!timeConfigured) {
@@ -683,9 +735,16 @@ void maintainWiFi(uint32_t nowMs) {
 }
 
 void maintainMqtt(uint32_t nowMs) {
-  if (WiFi.status() != WL_CONNECTED || mqttClient.connected()) {
+  if (!mqttTransportConfigured || WiFi.status() != WL_CONNECTED || mqttClient.connected()) {
     return;
   }
+
+#if FEEDER_MQTT_USE_TLS && !FEEDER_MQTT_TLS_INSECURE
+  // X.509 certificate validity cannot be checked safely before NTP sets UTC.
+  if (!clockIsReady()) {
+    return;
+  }
+#endif
 
   if (nowMs - lastMqttAttemptAtMs < RECONNECT_INTERVAL_MS) {
     return;
@@ -1085,18 +1144,125 @@ bool applyCoolingCommand(const char *payloadJson, const char *&result) {
   return true;
 }
 
+bool parseDigits(const char *value, size_t offset, size_t count, int &parsed) {
+  parsed = 0;
+  for (size_t index = 0; index < count; ++index) {
+    const char character = value[offset + index];
+    if (character < '0' || character > '9') {
+      return false;
+    }
+    parsed = parsed * 10 + (character - '0');
+  }
+  return true;
+}
+
+bool isLeapYear(int year) {
+  return (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+}
+
+int daysInMonth(int year, int month) {
+  static const uint8_t days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  if (month < 1 || month > 12) {
+    return 0;
+  }
+  if (month == 2 && isLeapYear(year)) {
+    return 29;
+  }
+  return days[month - 1];
+}
+
+int64_t daysSinceUnixEpoch(int year, unsigned int month, unsigned int day) {
+  year -= month <= 2;
+  const int era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned int yearOfEra = static_cast<unsigned int>(year - era * 400);
+  const int shiftedMonth = static_cast<int>(month) + (month > 2 ? -3 : 9);
+  const unsigned int dayOfYear = static_cast<unsigned int>((153 * shiftedMonth + 2) / 5) + day - 1;
+  const unsigned int dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+  return static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(dayOfEra) - 719468;
+}
+
+bool parseUtcTimestamp(const char *value, time_t &parsedTime) {
+  if (value == nullptr) {
+    return false;
+  }
+  const size_t length = strlen(value);
+  if (length < 20 || length > 40 || value[4] != '-' || value[7] != '-' || value[10] != 'T' ||
+      value[13] != ':' || value[16] != ':') {
+    return false;
+  }
+
+  int year;
+  int month;
+  int day;
+  int hour;
+  int minute;
+  int second;
+  if (!parseDigits(value, 0, 4, year) || !parseDigits(value, 5, 2, month) ||
+      !parseDigits(value, 8, 2, day) || !parseDigits(value, 11, 2, hour) ||
+      !parseDigits(value, 14, 2, minute) || !parseDigits(value, 17, 2, second) || year < 1970 ||
+      month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month) || hour > 23 || minute > 59 ||
+      second > 59) {
+    return false;
+  }
+
+  size_t timezoneOffset = 19;
+  if (timezoneOffset < length && value[timezoneOffset] == '.') {
+    ++timezoneOffset;
+    const size_t fractionStart = timezoneOffset;
+    while (timezoneOffset < length && isdigit(static_cast<unsigned char>(value[timezoneOffset]))) {
+      ++timezoneOffset;
+    }
+    if (timezoneOffset == fractionStart) {
+      return false;
+    }
+  }
+
+  const bool usesZulu = timezoneOffset + 1 == length && value[timezoneOffset] == 'Z';
+  const bool usesExplicitUtc = timezoneOffset + 6 == length && value[timezoneOffset] == '+' &&
+                               value[timezoneOffset + 1] == '0' && value[timezoneOffset + 2] == '0' &&
+                               value[timezoneOffset + 3] == ':' && value[timezoneOffset + 4] == '0' &&
+                               value[timezoneOffset + 5] == '0';
+  if (!usesZulu && !usesExplicitUtc) {
+    return false;
+  }
+
+  const int64_t epochSeconds = daysSinceUnixEpoch(year, month, day) * 86400 + hour * 3600 + minute * 60 + second;
+  parsedTime = static_cast<time_t>(epochSeconds);
+  if (static_cast<int64_t>(parsedTime) != epochSeconds) {
+    return false;
+  }
+
+  struct tm normalized = {};
+  gmtime_r(&parsedTime, &normalized);
+  return normalized.tm_year == year - 1900 && normalized.tm_mon == month - 1 && normalized.tm_mday == day &&
+         normalized.tm_hour == hour && normalized.tm_min == minute && normalized.tm_sec == second;
+}
+
 bool verifyCommandSignature(
     uint64_t commandId,
     const char *commandType,
     const char *payloadJson,
+    const char *expiresAt,
     const char *signature) {
-  const int canonicalLength = snprintf(
-      commandCanonicalBuffer,
-      sizeof(commandCanonicalBuffer),
-      "%llu|%s|%s",
-      static_cast<unsigned long long>(commandId),
-      commandType,
-      payloadJson);
+  int canonicalLength;
+  if (expiresAt == nullptr) {
+    canonicalLength = snprintf(
+        commandCanonicalBuffer,
+        sizeof(commandCanonicalBuffer),
+        "%llu|%s|%s",
+        static_cast<unsigned long long>(commandId),
+        commandType,
+        payloadJson);
+  } else {
+    canonicalLength = snprintf(
+        commandCanonicalBuffer,
+        sizeof(commandCanonicalBuffer),
+        "%llu|%s|%s|%s",
+        static_cast<unsigned long long>(commandId),
+        commandType,
+        payloadJson,
+        expiresAt);
+  }
   if (canonicalLength < 0 || static_cast<size_t>(canonicalLength) >= sizeof(commandCanonicalBuffer) ||
       !computeHmacHex(commandCanonicalBuffer, expectedCommandSignature, sizeof(expectedCommandSignature))) {
     return false;
@@ -1104,7 +1270,11 @@ bool verifyCommandSignature(
   return constantTimeSignatureMatches(signature, expectedCommandSignature);
 }
 
-void handleVerifiedCommand(uint64_t commandId, const char *commandType, const char *payloadJson) {
+void handleVerifiedCommand(
+    uint64_t commandId,
+    const char *commandType,
+    const char *payloadJson,
+    bool commandExpired) {
   CommandHistoryEntry *existing = findCommandHistory(commandId);
   if (existing != nullptr) {
     if (existing->completed) {
@@ -1130,6 +1300,11 @@ void handleVerifiedCommand(uint64_t commandId, const char *commandType, const ch
   }
   if (!persistCommandWatermark(commandId)) {
     finishCommand(commandId, "FAILED", "command_watermark_persist_failed");
+    return;
+  }
+
+  if (commandExpired) {
+    finishCommand(commandId, "FAILED", "command_expired");
     return;
   }
 
@@ -1217,9 +1392,12 @@ void onMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
   const JsonVariantConst commandIdValue = commandDocument["command_id"];
   const JsonVariantConst commandTypeValue = commandDocument["command_type"];
   const JsonVariantConst payloadJsonValue = commandDocument["payload_json"];
+  const JsonVariantConst expiresAtValue = commandDocument["expires_at"];
   const JsonVariantConst signatureValue = commandDocument["signature"];
   if (!commandIdValue.is<unsigned long long>() || !commandTypeValue.is<const char *>() ||
-      !payloadJsonValue.is<const char *>() || !signatureValue.is<const char *>()) {
+      !payloadJsonValue.is<const char *>() ||
+      (!expiresAtValue.isNull() && !expiresAtValue.is<const char *>()) ||
+      !signatureValue.is<const char *>()) {
     Serial.println("WARN rejected MQTT command with missing fields");
     return;
   }
@@ -1227,14 +1405,30 @@ void onMqttMessage(char *topic, uint8_t *payload, unsigned int length) {
   const uint64_t commandId = commandIdValue.as<uint64_t>();
   const char *commandType = commandTypeValue.as<const char *>();
   const char *payloadJson = payloadJsonValue.as<const char *>();
+  const char *expiresAt = expiresAtValue.is<const char *>() ? expiresAtValue.as<const char *>() : nullptr;
   const char *signature = signatureValue.as<const char *>();
   if (commandId == 0 || strlen(commandType) == 0 || strlen(commandType) > 40 ||
-      !verifyCommandSignature(commandId, commandType, payloadJson, signature)) {
+      (expiresAt != nullptr && (strlen(expiresAt) == 0 || strlen(expiresAt) > 40)) ||
+      !verifyCommandSignature(commandId, commandType, payloadJson, expiresAt, signature)) {
     Serial.println("WARN rejected MQTT command with invalid signature");
     return;
   }
 
-  handleVerifiedCommand(commandId, commandType, payloadJson);
+  bool commandExpired = false;
+  if (expiresAt != nullptr) {
+    time_t expiryTime;
+    if (!parseUtcTimestamp(expiresAt, expiryTime)) {
+      Serial.println("WARN rejected MQTT command with invalid expires_at");
+      return;
+    }
+    if (!clockIsReady()) {
+      Serial.println("WARN rejected expiring MQTT command before UTC synchronization");
+      return;
+    }
+    commandExpired = time(nullptr) >= expiryTime;
+  }
+
+  handleVerifiedCommand(commandId, commandType, payloadJson, commandExpired);
 }
 
 void setup() {
@@ -1278,6 +1472,7 @@ void setup() {
       static_cast<unsigned long>(ESP.getEfuseMac() & 0xFFFF),
       static_cast<unsigned long>(bootNonce));
 
+  mqttTransportConfigured = configureMqttTransport();
   mqttClient.setServer(FEEDER_MQTT_HOST, FEEDER_MQTT_PORT);
   mqttClient.setCallback(onMqttMessage);
   mqttClient.setBufferSize(3072);

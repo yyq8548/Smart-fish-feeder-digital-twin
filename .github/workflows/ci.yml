@@ -52,7 +52,12 @@ jobs:
       - run: arduino-cli core update-index
       - run: arduino-cli core install esp32:esp32
       - run: arduino-cli lib install ArduinoJson DallasTemperature OneWire PubSubClient
-      - run: arduino-cli compile --fqbn esp32:esp32:esp32 firmware/esp32_mqtt
+      - name: Compile plaintext Wokwi firmware
+        run: arduino-cli compile --fqbn esp32:esp32:esp32 --build-path /tmp/esp32-plaintext firmware/esp32_mqtt
+      - name: Compile verified-TLS physical firmware
+        run: |
+          cp firmware/esp32_mqtt/feeder_secrets.example.h firmware/esp32_mqtt/feeder_secrets.h
+          arduino-cli compile --fqbn esp32:esp32:esp32 --build-path /tmp/esp32-tls firmware/esp32_mqtt
 
   security:
     runs-on: ubuntu-latest
@@ -80,5 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose config --quiet
+      - run: docker compose --env-file .env.production.example -f docker-compose.production.yml config --quiet
+      - run: sh -n deploy/mosquitto/init-passwords.sh
       - name: Build and smoke-test Compose stack
         run: bash scripts/compose-smoke.sh

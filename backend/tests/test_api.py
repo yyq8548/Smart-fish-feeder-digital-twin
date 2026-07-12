@@ -7,6 +7,7 @@ def test_root_health_and_request_id(client: TestClient) -> None:
     root = client.get("/", headers={"X-Request-ID": "request-123"})
     assert root.status_code == 200
     assert root.json()["version"] == "4.0.0"
+    assert root.json()["docs"] == "/docs"
     assert root.headers["X-Request-ID"] == "request-123"
     assert client.get("/health").json() == {"status": "healthy", "database": "connected"}
 
@@ -43,10 +44,13 @@ def test_device_provisioning_returns_key_once(client: TestClient, operator_heade
     )
 
 
-def test_empty_monitoring_endpoints(client: TestClient) -> None:
-    assert client.get("/telemetry").json() == []
-    assert client.get("/alerts").json() == []
-    status = client.get("/device-status").json()
+def test_empty_monitoring_endpoints(client: TestClient, operator_headers: dict[str, str]) -> None:
+    assert client.get("/telemetry").status_code == 401
+    assert client.get("/alerts").status_code == 401
+    assert client.get("/device-status").status_code == 401
+    assert client.get("/telemetry", headers=operator_headers).json() == []
+    assert client.get("/alerts", headers=operator_headers).json() == []
+    status = client.get("/device-status", headers=operator_headers).json()
     assert status["online"] is False
     assert status["temperature_c"] is None
 
@@ -60,7 +64,10 @@ def test_ingest_requires_matching_device_credentials(client: TestClient, telemet
 
 
 def test_ingest_idempotency_and_sequence_ordering(
-    client: TestClient, telemetry_payload: dict[str, object], device_headers: dict[str, str]
+    client: TestClient,
+    telemetry_payload: dict[str, object],
+    device_headers: dict[str, str],
+    operator_headers: dict[str, str],
 ) -> None:
     first = client.post("/telemetry", json=telemetry_payload, headers=device_headers)
     assert first.status_code == 200
@@ -77,8 +84,8 @@ def test_ingest_idempotency_and_sequence_ordering(
     telemetry_payload["sequence_number"] = 2
     second = client.post("/telemetry", json=telemetry_payload, headers=device_headers)
     assert second.status_code == 200
-    assert len(client.get("/telemetry?device_uid=feeder-001").json()) == 2
-    status = client.get("/device-status").json()
+    assert len(client.get("/telemetry?device_uid=feeder-001", headers=operator_headers).json()) == 2
+    status = client.get("/device-status", headers=operator_headers).json()
     assert status["online"] is True
     assert status["last_sequence_number"] == 2
 
@@ -181,13 +188,13 @@ def test_sensor_failure_creates_acknowledgeable_alert(
     response = client.post("/telemetry", json=telemetry_payload, headers=device_headers)
     assert response.status_code == 200
     assert response.json()["alert_level"] == "critical"
-    alerts = client.get("/alerts?unacknowledged_only=true").json()
+    alerts = client.get("/alerts?unacknowledged_only=true", headers=operator_headers).json()
     assert alerts[0]["category"] == "SENSOR_FAILURE"
     telemetry_payload.update(
         {"idempotency_key": "reading-2", "sequence_number": 2, "recorded_at": datetime.now(UTC).isoformat()}
     )
     assert client.post("/telemetry", json=telemetry_payload, headers=device_headers).status_code == 200
-    assert len(client.get("/alerts").json()) == 1
+    assert len(client.get("/alerts", headers=operator_headers).json()) == 1
     acknowledged = client.post(f"/alerts/{alerts[0]['id']}/acknowledge", headers=operator_headers)
     assert acknowledged.status_code == 200
     assert acknowledged.json()["acknowledged_at"] is not None
@@ -201,7 +208,7 @@ def test_sensor_failure_creates_acknowledgeable_alert(
         }
     )
     assert client.post("/telemetry", json=telemetry_payload, headers=device_headers).status_code == 200
-    assert client.get("/alerts").json()[0]["resolved_at"] is not None
+    assert client.get("/alerts", headers=operator_headers).json()[0]["resolved_at"] is not None
     telemetry_payload.update(
         {
             "idempotency_key": "reading-new-failure",
@@ -212,17 +219,18 @@ def test_sensor_failure_creates_acknowledgeable_alert(
         }
     )
     assert client.post("/telemetry", json=telemetry_payload, headers=device_headers).status_code == 200
-    assert len(client.get("/alerts").json()) == 2
+    assert len(client.get("/alerts", headers=operator_headers).json()) == 2
 
 
 def test_open_temperature_alert_escalates_without_duplicate(
     client: TestClient,
     telemetry_payload: dict[str, object],
     device_headers: dict[str, str],
+    operator_headers: dict[str, str],
 ) -> None:
     telemetry_payload["temperature_c"] = 5.5
     assert client.post("/telemetry", json=telemetry_payload, headers=device_headers).status_code == 200
-    first_alert = client.get("/alerts").json()[0]
+    first_alert = client.get("/alerts", headers=operator_headers).json()[0]
     assert first_alert["level"] == "warning"
 
     telemetry_payload.update(
@@ -234,7 +242,7 @@ def test_open_temperature_alert_escalates_without_duplicate(
         }
     )
     assert client.post("/telemetry", json=telemetry_payload, headers=device_headers).status_code == 200
-    alerts = client.get("/alerts").json()
+    alerts = client.get("/alerts", headers=operator_headers).json()
     assert len(alerts) == 1
     assert alerts[0]["id"] == first_alert["id"]
     assert alerts[0]["level"] == "critical"
@@ -296,8 +304,12 @@ def test_schedule_crud_and_feeding_execution(
 
 
 def test_command_lifecycle(
-    client: TestClient, operator_headers: dict[str, str], device_headers: dict[str, str]
+    client: TestClient,
+    operator_headers: dict[str, str],
+    device_headers: dict[str, str],
+    telemetry_payload: dict[str, object],
 ) -> None:
+    assert client.post("/telemetry", json=telemetry_payload, headers=device_headers).status_code == 200
     created = client.post(
         "/devices/feeder-001/commands",
         json={
@@ -308,6 +320,7 @@ def test_command_lifecycle(
         headers=operator_headers,
     )
     assert created.status_code == 201
+    assert created.json()["expires_at"] is not None
     duplicate = client.post(
         "/devices/feeder-001/commands",
         json={
@@ -347,7 +360,9 @@ def test_scheduled_command_completion_recovers_lost_telemetry(
     client: TestClient,
     operator_headers: dict[str, str],
     device_headers: dict[str, str],
+    telemetry_payload: dict[str, object],
 ) -> None:
+    assert client.post("/telemetry", json=telemetry_payload, headers=device_headers).status_code == 200
     now = datetime.now(UTC)
     schedule = client.post(
         "/devices/feeder-001/schedules",
@@ -461,6 +476,8 @@ def test_concurrent_command_idempotency_conflicts_are_recovered(
             device = endpoint_db.scalar(select(Device).where(Device.device_uid == "feeder-001"))
             user = endpoint_db.scalar(select(User).where(User.username == "test-admin"))
             assert device is not None and user is not None
+            device.last_seen_at = datetime.now(UTC)
+            endpoint_db.commit()
             original_commit = endpoint_db.commit
             injected = False
 
@@ -505,6 +522,19 @@ def test_concurrent_command_idempotency_conflicts_are_recovered(
     assert post_with_concurrent_insert("race-conflicting", "{}") == 409
 
 
-def test_pagination_validation(client: TestClient) -> None:
-    assert client.get("/telemetry?limit=0").status_code == 422
-    assert client.get("/alerts?limit=101").status_code == 422
+def test_offline_device_refuses_manual_actuation(
+    client: TestClient,
+    operator_headers: dict[str, str],
+) -> None:
+    response = client.post(
+        "/devices/feeder-001/commands",
+        json={"idempotency_key": "offline-feed", "command_type": "FEED_NOW", "payload": {}},
+        headers=operator_headers,
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Device is offline; refusing an actuation command"
+
+
+def test_pagination_validation(client: TestClient, operator_headers: dict[str, str]) -> None:
+    assert client.get("/telemetry?limit=0", headers=operator_headers).status_code == 422
+    assert client.get("/alerts?limit=101", headers=operator_headers).status_code == 422

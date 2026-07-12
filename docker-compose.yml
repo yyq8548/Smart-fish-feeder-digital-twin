@@ -10,6 +10,9 @@ services:
       FISH_FEEDER_ADMIN_PASSWORD: ${FISH_FEEDER_ADMIN_PASSWORD:-local-development-admin-password}
       FISH_FEEDER_JWT_SECRET: ${FISH_FEEDER_JWT_SECRET:-local-development-jwt-secret-change-me}
       FISH_FEEDER_CORS_ORIGINS: ${FISH_FEEDER_CORS_ORIGINS:-http://localhost:8080}
+      FISH_FEEDER_MANUAL_COMMAND_TTL_SECONDS: ${FISH_FEEDER_MANUAL_COMMAND_TTL_SECONDS:-45}
+      FISH_FEEDER_COMMAND_RESULT_GRACE_SECONDS: ${FISH_FEEDER_COMMAND_RESULT_GRACE_SECONDS:-90}
+      FISH_FEEDER_REQUIRE_ONLINE_FOR_ACTUATION: ${FISH_FEEDER_REQUIRE_ONLINE_FOR_ACTUATION:-true}
     volumes:
       - feeder-data:/app/data
     ports:
@@ -58,6 +61,12 @@ services:
       DEVICE_CREDENTIALS_JSON: ${DEVICE_CREDENTIALS_JSON:-}
       MQTT_SHARED_SECRETS_JSON: ${MQTT_SHARED_SECRETS_JSON:-}
       MQTT_HOST: mqtt
+      MQTT_PORT: 1883
+      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID:-fish-feeder-http-bridge}
+      MQTT_USERNAME: ""
+      MQTT_PASSWORD: ""
+      MQTT_TLS_ENABLED: "false"
+      MQTT_TLS_INSECURE: "false"
     depends_on:
       backend:
         condition: service_healthy

@@ -3,34 +3,66 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Smart Fish Feeder Dashboard</title>
+  <title>Smart Fish Feeder Operations</title>
   <link rel="stylesheet" href="style.css" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
   <main class="container">
     <section class="hero">
       <div>
-        <p class="eyebrow">IoT Telemetry Dashboard</p>
-        <h1>Smart Fish Feeder Digital Twin v4</h1>
+        <p class="eyebrow">Authenticated IoT Operations</p>
+        <h1>Smart Fish Feeder Digital Twin</h1>
         <p class="subtitle">
-          Real API dashboard for simulated ESP32 telemetry, temperature logs, pump status, and rule-based alerts.
+          Monitor ordered telemetry, investigate alerts, and safely operate a selected feeder from one control plane.
         </p>
       </div>
-      <div class="status-pill" id="systemHealth">Waiting for API</div>
+      <div class="status-pill" id="systemHealth" data-level="unknown" aria-live="polite">Sign In Required</div>
     </section>
 
-    <section class="grid">
+    <section class="panel session-panel" aria-labelledby="access-heading">
+      <div>
+        <p class="eyebrow">Operator access</p>
+        <h2 id="access-heading">Secure session</h2>
+        <p class="panel-copy">Credentials are exchanged for a short-lived bearer token kept only in this browser tab.</p>
+      </div>
+      <form id="loginForm" class="login-form">
+        <label>
+          Username
+          <input name="username" autocomplete="username" required />
+        </label>
+        <label>
+          Password
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button class="button primary" type="submit">Sign in</button>
+      </form>
+      <div id="operatorSession" class="operator-session" hidden>
+        <div>
+          <span class="label">Signed in as</span>
+          <strong id="operatorUsername"></strong>
+        </div>
+        <label>
+          Selected device
+          <select id="deviceSelect" aria-label="Selected device"></select>
+        </label>
+        <button class="button secondary" id="logoutButton" type="button">Sign out</button>
+      </div>
+      <p id="loginMessage" class="notice" aria-live="polite" hidden></p>
+    </section>
+
+    <p id="monitoringMessage" class="notice wide-notice" aria-live="polite" hidden></p>
+
+    <section class="grid" aria-label="Selected device telemetry">
       <article class="card">
         <h2>Reservoir Temperature</h2>
         <p class="metric"><span id="temperature">--</span>°C</p>
-        <p class="hint">Target range: 3.0°C – 5.0°C</p>
+        <p class="hint">Control hysteresis: 3.0°C–5.0°C</p>
       </article>
 
       <article class="card">
         <h2>Cooling</h2>
         <p class="metric" id="coolingStatus">--</p>
-        <p class="hint">MOSFET-driven Peltier module</p>
+        <p class="hint">Automatic or operator-selected mode</p>
       </article>
 
       <article class="card">
@@ -42,23 +74,89 @@
       <article class="card">
         <h2>Last Seen</h2>
         <p class="metric small" id="lastSeen">--</p>
-        <p class="hint">Latest telemetry timestamp</p>
+        <p class="hint">Latest accepted device event</p>
       </article>
     </section>
 
-    <section class="panel">
+    <section class="panel" aria-labelledby="history-heading">
       <div class="panel-header">
         <div>
-          <h2>Temperature History</h2>
-          <p>Fetched from FastAPI `/telemetry` endpoint backed by SQLite.</p>
+          <h2 id="history-heading">Temperature History</h2>
+          <p>Recent telemetry for the selected device.</p>
         </div>
-        <div class="api-url">API: <code>http://127.0.0.1:8000</code></div>
+        <div class="api-url">Authenticated API via <code>/api</code></div>
       </div>
       <canvas id="tempChart"></canvas>
     </section>
 
-    <section class="panel">
-      <h2>Rule-Based Alerts</h2>
+    <div class="operations-grid">
+      <section class="panel" aria-labelledby="controls-heading">
+        <div class="panel-header compact">
+          <div>
+            <p class="eyebrow">Physical controls</p>
+            <h2 id="controls-heading">Device commands</h2>
+          </div>
+          <span class="safety-badge">Confirmation required</span>
+        </div>
+        <p class="panel-copy">
+          Actuation is available only while the selected device is online. The server records every request and its terminal result.
+        </p>
+        <p id="controlState" class="notice" aria-live="polite"></p>
+        <div class="command-section">
+          <h3>Pump</h3>
+          <p class="control-hint">Durations are validated here for immediate feedback and validated again by the API.</p>
+          <div class="duration-grid">
+            <div class="duration-command">
+              <label for="feedDuration">Feed duration (ms)</label>
+              <div class="duration-action">
+                <input id="feedDuration" type="number" min="500" max="60000" step="1" value="1000"
+                  inputmode="numeric" data-duration-control disabled />
+                <button class="button danger" type="button" data-command="FEED_NOW"
+                  data-duration-input="feedDuration" disabled>Feed now</button>
+              </div>
+            </div>
+            <div class="duration-command">
+              <label for="cleanDuration">Clean duration (ms)</label>
+              <div class="duration-action">
+                <input id="cleanDuration" type="number" min="500" max="60000" step="1" value="1000"
+                  inputmode="numeric" data-duration-control disabled />
+                <button class="button secondary" type="button" data-command="CLEAN_PUMP"
+                  data-duration-input="cleanDuration" disabled>Clean pump</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="command-section">
+          <h3>Cooling mode</h3>
+          <div class="button-row">
+            <button class="button secondary" type="button" data-command="SET_COOLING" data-mode="AUTO" disabled>Automatic</button>
+            <button class="button secondary" type="button" data-command="SET_COOLING" data-mode="FORCED_ON" disabled>Force on</button>
+            <button class="button secondary" type="button" data-command="SET_COOLING" data-mode="FORCED_OFF" disabled>Force off</button>
+          </div>
+        </div>
+        <p id="commandMessage" class="notice" aria-live="polite" hidden></p>
+      </section>
+
+      <section class="panel" aria-labelledby="commands-heading">
+        <div class="panel-header compact">
+          <div>
+            <p class="eyebrow">Audit trail</p>
+            <h2 id="commands-heading">Command history</h2>
+          </div>
+        </div>
+        <div id="commandHistory">
+          <p class="empty-state">Sign in to view command history.</p>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel" aria-labelledby="alerts-heading">
+      <div class="panel-header compact">
+        <div>
+          <p class="eyebrow">Durable incidents</p>
+          <h2 id="alerts-heading">Recent alerts</h2>
+        </div>
+      </div>
       <ul id="alertLog"></ul>
     </section>
   </main>

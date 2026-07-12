@@ -60,11 +60,13 @@ MQTT_SHARED_SECRET=local-development-mqtt-secret \
 python mock_device/mqtt_bridge.py
 ```
 
-Open <http://localhost:8080>. The dashboard should update after the first
-heartbeat. If the configured API key has been changed, give `DEVICE_API_KEY`
-the same value. The firmware's default `feeder-001` UID matches the backend's
-bootstrap device. If you choose a different UID, provision that device in the
-API first and run the bridge with its returned key.
+Open <http://localhost:8080> and sign in with the local operator credentials
+from Compose (`admin` / `local-development-admin-password` unless overridden in
+`.env`). The dashboard should update after the first heartbeat. If the
+configured API key has been changed, give `DEVICE_API_KEY` the same value. The
+firmware's default `feeder-001` UID matches the backend's bootstrap device. If
+you choose a different UID, provision that device in the API first and run the
+bridge with its returned key.
 
 For a fully local broker, use Wokwi's Private IoT Gateway, change
 `FEEDER_MQTT_HOST` to `host.wokwi.internal`, and run the complete Compose stack.
@@ -204,22 +206,31 @@ Commands use a positive, strictly increasing per-device integer ID and a
 JSON-encoded **string** for `payload_json`. The same monotonic ID sequence must
 cover operator commands and optional `SYNC_SCHEDULES` mirror messages. The sender
 signs the decoded string exactly as transmitted; it must not parse and
-reserialize the inner JSON after calculating the signature.
+reserialize the inner JSON after calculating the signature. Online operator
+commands also carry a signed UTC `expires_at` deadline so a request cannot wait
+through a long outage and actuate unexpectedly after reconnection.
 
 ```json
 {
   "command_id": 42,
   "command_type": "FEED_NOW",
   "payload_json": "{\"duration_ms\":1000}",
-  "signature": "7c44ce9a536c5b9f9bd83ccf57c48409def4413c2693c615e6f1c01629e3dd28"
+  "expires_at": "2026-07-11T12:35:30Z",
+  "signature": "5e508b65506a280503c153d1ac72327210d5e59856f258d4d8983c4d2f72aba5"
 }
 ```
 
 That signature is HMAC-SHA256 of this exact canonical UTF-8 text:
 
 ```text
-42|FEED_NOW|{"duration_ms":1000}
+42|FEED_NOW|{"duration_ms":1000}|2026-07-11T12:35:30Z
 ```
+
+The example uses `local-development-mqtt-secret`. The bridge normalizes API
+timestamps to explicit UTC before publishing and signs the exact transmitted
+expiry. The ESP32 rejects malformed or expired values before actuation and
+publishes the signed terminal result `FAILED / command_expired`. Legacy local
+commands without an expiry keep the original three-field canonical format.
 
 Supported commands:
 

@@ -1,0 +1,263 @@
+name: smart-fish-feeder-production
+
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  traefik:
+    image: traefik:v3.7.7
+    restart: unless-stopped
+    command:
+      - --api.dashboard=false
+      - --log.level=INFO
+      - --accesslog=true
+      - --ping=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.filename=/etc/traefik/tls.yml
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.mqtts.address=:8883
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env.production}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.letsencrypt.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
+      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8883:8883"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./deploy/traefik/tls.yml:/etc/traefik/tls.yml:ro
+      - traefik-acme:/letsencrypt
+    depends_on:
+      mqtt-init:
+        condition: service_completed_successfully
+    networks:
+      - edge
+      - mqtt
+    logging: *default-logging
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      FISH_FEEDER_DATABASE_URL: sqlite:////app/data/fish_feeder.db
+      FISH_FEEDER_BOOTSTRAP_DEVICE_UID: ${DEVICE_UID:?Set DEVICE_UID in .env.production}
+      FISH_FEEDER_DEVICE_API_KEY: ${FISH_FEEDER_DEVICE_API_KEY:?Set FISH_FEEDER_DEVICE_API_KEY in .env.production}
+      FISH_FEEDER_CREDENTIAL_PEPPER: ${FISH_FEEDER_CREDENTIAL_PEPPER:?Set FISH_FEEDER_CREDENTIAL_PEPPER in .env.production}
+      FISH_FEEDER_ADMIN_USERNAME: ${FISH_FEEDER_ADMIN_USERNAME:?Set FISH_FEEDER_ADMIN_USERNAME in .env.production}
+      FISH_FEEDER_ADMIN_PASSWORD: ${FISH_FEEDER_ADMIN_PASSWORD:?Set FISH_FEEDER_ADMIN_PASSWORD in .env.production}
+      FISH_FEEDER_JWT_SECRET: ${FISH_FEEDER_JWT_SECRET:?Set FISH_FEEDER_JWT_SECRET in .env.production}
+      FISH_FEEDER_ROOT_PATH: ${FISH_FEEDER_ROOT_PATH:-/api}
+      FISH_FEEDER_CORS_ORIGINS: https://${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env.production}
+      FISH_FEEDER_REQUIRE_ONLINE_FOR_ACTUATION: ${FISH_FEEDER_REQUIRE_ONLINE_FOR_ACTUATION:-true}
+      FISH_FEEDER_MANUAL_COMMAND_TTL_SECONDS: ${FISH_FEEDER_MANUAL_COMMAND_TTL_SECONDS:-45}
+      FISH_FEEDER_COMMAND_LEASE_SECONDS: ${FISH_FEEDER_COMMAND_LEASE_SECONDS:-10}
+      FISH_FEEDER_COMMAND_RESULT_GRACE_SECONDS: ${FISH_FEEDER_COMMAND_RESULT_GRACE_SECONDS:-90}
+      FISH_FEEDER_OFFLINE_AFTER_SECONDS: ${FISH_FEEDER_OFFLINE_AFTER_SECONDS:-45}
+      FISH_FEEDER_RELIABILITY_SCAN_INTERVAL_SECONDS: ${FISH_FEEDER_RELIABILITY_SCAN_INTERVAL_SECONDS:-30}
+    volumes:
+      - feeder-data:/app/data
+    expose:
+      - "8000"
+    depends_on:
+      mqtt-init:
+        condition: service_completed_successfully
+    networks:
+      - app
+    logging: *default-logging
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  dashboard:
+    build: ./dashboard
+    restart: unless-stopped
+    volumes:
+      - ./deploy/dashboard/nginx.production.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/dashboard/runtime-config.js:/usr/share/nginx/html/runtime-config.js:ro
+    expose:
+      - "8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - edge
+      - app
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=fish-feeder-edge
+      - "traefik.http.routers.feeder-web.rule=Host(`${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env.production}`)"
+      - traefik.http.routers.feeder-web.entrypoints=websecure
+      - traefik.http.routers.feeder-web.tls=true
+      - traefik.http.routers.feeder-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.feeder-web.middlewares=feeder-security
+      - traefik.http.routers.feeder-web.service=feeder-web
+      - traefik.http.services.feeder-web.loadbalancer.server.port=8080
+      - traefik.http.middlewares.feeder-security.headers.contenttypenosniff=true
+      - traefik.http.middlewares.feeder-security.headers.framedeny=true
+      - traefik.http.middlewares.feeder-security.headers.referrerpolicy=no-referrer
+      - traefik.http.middlewares.feeder-security.headers.stsseconds=31536000
+      - traefik.http.middlewares.feeder-security.headers.stspreload=false
+      - "traefik.http.middlewares.feeder-security.headers.permissionspolicy=camera=(), microphone=(), geolocation=()"
+      - "traefik.http.middlewares.feeder-security.headers.contentsecuritypolicy=default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  mqtt-init:
+    image: eclipse-mosquitto:2.1.2-alpine
+    user: "0:0"
+    restart: "no"
+    entrypoint: ["/bin/sh", "/init/init-passwords.sh"]
+    environment:
+      DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:?Set DASHBOARD_DOMAIN in .env.production}
+      MQTT_DOMAIN: ${MQTT_DOMAIN:?Set MQTT_DOMAIN in .env.production}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env.production}
+      DEVICE_UID: ${DEVICE_UID:?Set DEVICE_UID in .env.production}
+      MQTT_BRIDGE_USERNAME: ${MQTT_BRIDGE_USERNAME:-bridge}
+      MQTT_BRIDGE_PASSWORD: ${MQTT_BRIDGE_PASSWORD:?Set MQTT_BRIDGE_PASSWORD in .env.production}
+      MQTT_DEVICE_USERNAME: ${MQTT_DEVICE_USERNAME:?Set MQTT_DEVICE_USERNAME in .env.production}
+      MQTT_DEVICE_PASSWORD: ${MQTT_DEVICE_PASSWORD:?Set MQTT_DEVICE_PASSWORD in .env.production}
+      FISH_FEEDER_DEVICE_API_KEY: ${FISH_FEEDER_DEVICE_API_KEY:?Set FISH_FEEDER_DEVICE_API_KEY in .env.production}
+      FISH_FEEDER_CREDENTIAL_PEPPER: ${FISH_FEEDER_CREDENTIAL_PEPPER:?Set FISH_FEEDER_CREDENTIAL_PEPPER in .env.production}
+      FISH_FEEDER_ADMIN_PASSWORD: ${FISH_FEEDER_ADMIN_PASSWORD:?Set FISH_FEEDER_ADMIN_PASSWORD in .env.production}
+      FISH_FEEDER_JWT_SECRET: ${FISH_FEEDER_JWT_SECRET:?Set FISH_FEEDER_JWT_SECRET in .env.production}
+      MQTT_SHARED_SECRET: ${MQTT_SHARED_SECRET:?Set MQTT_SHARED_SECRET in .env.production}
+    volumes:
+      - ./deploy/mosquitto/init-passwords.sh:/init/init-passwords.sh:ro
+      - mqtt-secrets:/mosquitto/secrets
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+
+  mqtt:
+    image: eclipse-mosquitto:2.1.2-alpine
+    restart: unless-stopped
+    command: ["mosquitto", "-c", "/mosquitto/config/mosquitto.conf"]
+    environment:
+      MQTT_BRIDGE_USERNAME: ${MQTT_BRIDGE_USERNAME:-bridge}
+      MQTT_BRIDGE_PASSWORD: ${MQTT_BRIDGE_PASSWORD:?Set MQTT_BRIDGE_PASSWORD in .env.production}
+    volumes:
+      - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./deploy/mosquitto/acl:/mosquitto/config/acl:ro
+      - mqtt-secrets:/mosquitto/secrets:ro
+      - mqtt-data:/mosquitto/data
+    expose:
+      - "1883"
+    depends_on:
+      mqtt-init:
+        condition: service_completed_successfully
+    networks:
+      - mqtt
+    logging: *default-logging
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=fish-feeder-mqtt
+      - "traefik.tcp.routers.feeder-mqtt.rule=HostSNI(`${MQTT_DOMAIN:?Set MQTT_DOMAIN in .env.production}`)"
+      - traefik.tcp.routers.feeder-mqtt.entrypoints=mqtts
+      - traefik.tcp.routers.feeder-mqtt.tls=true
+      - traefik.tcp.routers.feeder-mqtt.tls.certresolver=letsencrypt
+      - traefik.tcp.routers.feeder-mqtt.service=feeder-mqtt
+      - traefik.tcp.services.feeder-mqtt.loadbalancer.server.port=1883
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -p 1883 -u \"$$MQTT_BRIDGE_USERNAME\" -P \"$$MQTT_BRIDGE_PASSWORD\" -t '$$SYS/broker/version' -C 1 -W 3 >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  mqtt-bridge:
+    build: ./mock_device
+    restart: unless-stopped
+    command: ["python", "mqtt_bridge.py"]
+    environment:
+      API_URL: http://backend:8000/telemetry
+      DEVICE_UID: ${DEVICE_UID:?Set DEVICE_UID in .env.production}
+      DEVICE_API_KEY: ${FISH_FEEDER_DEVICE_API_KEY:?Set FISH_FEEDER_DEVICE_API_KEY in .env.production}
+      MQTT_SHARED_SECRET: ${MQTT_SHARED_SECRET:?Set MQTT_SHARED_SECRET in .env.production}
+      DEVICE_CREDENTIALS_JSON: "${DEVICE_CREDENTIALS_JSON:-}"
+      MQTT_SHARED_SECRETS_JSON: "${MQTT_SHARED_SECRETS_JSON:-}"
+      MQTT_HOST: mqtt
+      MQTT_PORT: "1883"
+      MQTT_TOPIC_PREFIX: fish-feeder
+      MQTT_USERNAME: ${MQTT_BRIDGE_USERNAME:-bridge}
+      MQTT_PASSWORD: ${MQTT_BRIDGE_PASSWORD:?Set MQTT_BRIDGE_PASSWORD in .env.production}
+      MQTT_TLS_ENABLED: "false"
+      COMMAND_POLL_SECONDS: ${COMMAND_POLL_SECONDS:-2}
+    volumes:
+      - ./deploy/mqtt-bridge/production_healthcheck.py:/app/production_healthcheck.py:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      mqtt:
+        condition: service_healthy
+    networks:
+      - app
+      - mqtt
+    logging: *default-logging
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "/app/production_healthcheck.py"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+volumes:
+  feeder-data:
+  mqtt-data:
+  mqtt-secrets:
+  traefik-acme:
+
+networks:
+  edge:
+    name: fish-feeder-edge
+  app:
+    name: fish-feeder-app
+    internal: true
+  mqtt:
+    name: fish-feeder-mqtt
+    internal: true

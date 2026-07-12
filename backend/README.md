@@ -34,6 +34,10 @@ All variables use the `FISH_FEEDER_` prefix:
 | `LOGIN_RATE_LIMIT_PER_MINUTE` | Per-client login limit |
 | `RELIABILITY_SCAN_INTERVAL_SECONDS` | Automatic missed/offline scan interval |
 | `COMMAND_LEASE_SECONDS` | Time before an unconfirmed command can be reclaimed |
+| `MANUAL_COMMAND_TTL_SECONDS` | Maximum time an operator command may wait before delivery |
+| `COMMAND_RESULT_GRACE_SECONDS` | Time a claimed command may await its physical terminal result after the delivery deadline |
+| `ROOT_PATH` | Optional reverse-proxy prefix used by OpenAPI and Swagger links |
+| `REQUIRE_ONLINE_FOR_ACTUATION` | Reject feed, clean, and cooling commands when heartbeats are stale |
 | `CREDENTIAL_ATTEMPT_RATE_LIMIT_PER_MINUTE` | Per-client invalid/valid ingestion-attempt limit |
 
 ## Migrations
@@ -47,9 +51,10 @@ All variables use the `FISH_FEEDER_` prefix:
 - Device keys can be rotated through the authenticated operator API.
 - Login and telemetry ingestion use bounded in-process rate limits.
 - CORS explicitly allows configured origins and headers.
+- Operational telemetry, status, alerts, schedules, and commands require an operator bearer token.
 
 Telemetry idempotency is backed by a canonical SHA-256 payload fingerprint, so concurrent exact retries return the winning row while key reuse with changed content returns `409`.
 
-Commands require caller-provided idempotency keys. Their type-specific payloads reject unknown fields and invalid actuator values and are capped at 1,024 serialized bytes. Claiming uses conditional database updates and expiring leases; firmware persists a monotonic NVS watermark before actuation so a reclaimed command cannot repeat a physical operation after reboot. Terminal completion calls are themselves idempotent, and a signed scheduled-feed completion reconciles execution history when telemetry was lost.
+Commands require caller-provided idempotency keys. Their type-specific payloads reject unknown fields and invalid actuator values and are capped at 1,024 serialized bytes. Manual actuation is refused while the device is offline, and every operator command receives a short delivery deadline so an old pending request cannot run after a later reconnect. Claiming uses conditional database updates and expiring leases; once delivered, a separate result grace keeps long-running pump cycles in `CLAIMED` state while their signed terminal result is still expected. Firmware persists a monotonic NVS watermark before actuation so a reclaimed command cannot repeat a physical operation after reboot. Terminal completion calls are themselves idempotent, and a signed scheduled-feed completion reconciles execution history when telemetry was lost.
 
 The in-process limiter assumes one API process. Use a shared rate-limit store before horizontal scaling.

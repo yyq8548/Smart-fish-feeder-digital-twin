@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     admin_password: str = "change-this-admin-password"
     jwt_secret: str = "change-this-jwt-secret-at-least-32-characters"
     jwt_expire_minutes: int = 30
+    root_path: str = ""
     cors_origins: str = "http://localhost:8080,http://127.0.0.1:8080"
     offline_after_seconds: int = 15
     max_telemetry_age_seconds: int = 86_400
@@ -21,6 +22,9 @@ class Settings(BaseSettings):
     login_rate_limit_per_minute: int = Field(default=10, ge=1)
     reliability_scan_interval_seconds: int = Field(default=60, ge=5)
     command_lease_seconds: int = Field(default=30, ge=5, le=300)
+    command_result_grace_seconds: int = Field(default=90, ge=15, le=600)
+    manual_command_ttl_seconds: int = Field(default=45, ge=5, le=300)
+    require_online_for_actuation: bool = True
     credential_attempt_rate_limit_per_minute: int = Field(default=30, ge=1)
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="FISH_FEEDER_")

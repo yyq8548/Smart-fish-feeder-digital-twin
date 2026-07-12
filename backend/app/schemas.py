@@ -255,6 +255,7 @@ class CommandOut(BaseModel):
     status: str
     claimed_at: datetime | None
     lease_expires_at: datetime | None
+    expires_at: datetime | None
     completed_at: datetime | None
     result: str | None
     created_at: datetime

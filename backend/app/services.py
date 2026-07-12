@@ -289,6 +289,7 @@ def scan_reliability(db: Session, now: datetime, offline_after_seconds: int) -> 
                         command_type="FEED_NOW",
                         payload_json=json.dumps({"schedule_id": schedule.id}, separators=(",", ":"), sort_keys=True),
                         requested_by_user_id=operator.id,
+                        expires_at=(expected_local + timedelta(minutes=schedule.grace_minutes)).astimezone(UTC),
                     )
                 )
                 commands_created += 1

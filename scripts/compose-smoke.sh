@@ -24,6 +24,7 @@ export FISH_FEEDER_ADMIN_USERNAME="$smoke_admin"
 export FISH_FEEDER_ADMIN_PASSWORD="$smoke_password"
 export FISH_FEEDER_CREDENTIAL_PEPPER="compose-smoke-credential-pepper"
 export FISH_FEEDER_JWT_SECRET="compose-smoke-jwt-secret-at-least-32-characters"
+export FISH_FEEDER_OFFLINE_AFTER_SECONDS="120"
 export MQTT_SHARED_SECRET="$mqtt_shared_secret"
 export DEVICE_UID="$mqtt_device"
 export DEVICE_CREDENTIALS_JSON=""
@@ -143,7 +144,9 @@ echo "Waiting for MQTT telemetry to reach the API"
 mqtt_status=""
 mqtt_delivered=false
 for _ in {1..30}; do
-  mqtt_status="$(get_json "$api_url/device-status?device_uid=$mqtt_device")"
+  mqtt_status="$(curl "${curl_timeout[@]}" --fail-with-body --silent --show-error --retry 5 \
+    --retry-connrefused --retry-delay 1 --header "Authorization: Bearer $access_token" \
+    "$api_url/device-status?device_uid=$mqtt_device")"
   if printf '%s' "$mqtt_status" | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p["online"] and p["temperature_c"] == 6.0 and p["last_sequence_number"] == 1' 2>/dev/null; then
     mqtt_delivered=true
     break
@@ -189,6 +192,9 @@ import os
 message = json.loads(os.environ["COMMAND_MESSAGE"])
 assert str(message["command_id"]) == os.environ["EXPECTED_COMMAND_ID"], message
 canonical = f"{message['"'"'command_id'"'"']}|{message['"'"'command_type'"'"']}|{message['"'"'payload_json'"'"']}"
+expires_at = message.get("expires_at")
+assert isinstance(expires_at, str) and expires_at.endswith("Z"), message
+canonical += f"|{expires_at}"
 expected = hmac.new(os.environ["MQTT_SHARED_SECRET"].encode(), canonical.encode(), hashlib.sha256).hexdigest()
 assert hmac.compare_digest(message["signature"], expected), message
 '
@@ -227,7 +233,9 @@ echo "Verifying dashboard and its backend proxy"
 dashboard_health="$(curl "${curl_timeout[@]}" --fail-with-body --silent --show-error "$dashboard_url/health")"
 [[ "$dashboard_health" == *"healthy"* ]] || fail "dashboard health endpoint did not report healthy"
 dashboard_html="$(curl "${curl_timeout[@]}" --fail-with-body --silent --show-error "$dashboard_url/")"
-[[ "$dashboard_html" == *"Smart Fish Feeder Dashboard"* ]] || fail "dashboard HTML did not contain the expected title"
+[[ "$dashboard_html" == *"Smart Fish Feeder Operations"* ]] || fail "dashboard HTML did not contain the expected title"
+dashboard_chart="$(curl "${curl_timeout[@]}" --fail-with-body --silent --show-error "$dashboard_url/chart.js")"
+[[ "$dashboard_chart" == *"TelemetryLineChart"* ]] || fail "dashboard chart module was not served"
 proxy_health="$(get_json "$dashboard_url/api/health")"
 printf '%s' "$proxy_health" | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"healthy","database":"connected"}'
 

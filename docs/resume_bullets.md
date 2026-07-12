@@ -6,7 +6,7 @@ Use only metrics supported by the current repository and CI results.
 
 - Built an authenticated IoT operations platform with FastAPI, SQLAlchemy, Alembic, MQTT, and Docker Compose, modeling devices, ordered telemetry, feeding schedules and executions, durable alerts, and remote commands.
 - Implemented per-device credential hashing, Argon2/JWT operator authentication, idempotent ingestion, event-order validation, rate limiting, heartbeat monitoring, and automated missed-feeding detection.
-- Added 42 backend tests plus frontend state tests and GitHub Actions gates for strict typing, linting, dependency audits, firmware compilation, container builds, and a full-stack MQTT/API/dashboard smoke test.
+- Added 47 backend tests, 13 focused MQTT transport tests, and 20 frontend tests plus GitHub Actions gates for strict typing, linting, dependency audits, firmware compilation, container builds, and a full-stack MQTT/API/dashboard smoke test.
 
 ## Embedded / IoT version
 

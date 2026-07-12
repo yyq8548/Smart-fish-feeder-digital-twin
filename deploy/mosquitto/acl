@@ -1,0 +1,12 @@
+# The HTTP bridge can consume signed device messages and publish signed commands.
+user bridge
+topic read $SYS/broker/version
+topic read fish-feeder/+/telemetry
+topic read fish-feeder/+/command-results
+topic write fish-feeder/+/commands
+
+# Each physical device authenticates with a username equal to its device UID.
+# The %u substitution prevents one device from accessing another device's topics.
+pattern write fish-feeder/%u/telemetry
+pattern write fish-feeder/%u/command-results
+pattern read fish-feeder/%u/commands
