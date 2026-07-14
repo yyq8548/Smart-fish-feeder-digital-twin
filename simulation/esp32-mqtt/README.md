@@ -14,6 +14,8 @@ DS18B20 + button <-> ESP32 <-> MQTT <-> MQTT bridge <-> FastAPI/dashboard
 - `libraries.txt` - Arduino libraries installed by Wokwi
 - `wokwi.toml` - local Wokwi for VS Code/CLI configuration
 - `verify_feeder.yaml` - automated hysteresis and pump-cycle scenario
+- `verify_closed_loop.yaml` - waits for a dashboard command and asserts its GPIO lifecycle
+- `amazon-root-ca-1.pem` - public root used by the default verified-TLS test broker
 
 ## Run it directly from this repository
 
@@ -102,6 +104,16 @@ bridge with its returned key.
 For a fully local broker, use Wokwi's Private IoT Gateway, change
 `FEEDER_MQTT_HOST` to `host.wokwi.internal`, and run the complete Compose stack.
 The public Wokwi gateway cannot reach a broker bound only to your computer.
+
+For an automated end-to-end run without the paid Private Gateway, execute
+`bash scripts/wokwi-closed-loop.sh` from the repository root. It connects both
+the Compose MQTT bridge and Wokwi firmware to a unique topic namespace on a
+certificate-verified TLS broker, drives `FEED_NOW` through the Chromium
+dashboard, checks the physical GPIO sequence in Wokwi, validates the signed
+result in the bridge, and waits for `COMPLETED` in the dashboard. The public
+default broker is suitable only for isolated test traffic; provide the
+`WOKWI_E2E_MQTT_*` variables documented in the main README to use an
+authenticated broker.
 
 ## Exercise the state machine
 

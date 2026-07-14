@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -90,3 +93,52 @@ def test_wokwi_scenario_covers_boundaries_and_pump_phases() -> None:
     for pin in (25, 26, 27, 33):
         assert f"pin: D{pin}" in scenario
     assert "expected:" not in scenario
+
+
+def test_closed_loop_scenario_proves_command_gpio_and_completion() -> None:
+    scenario = (SIMULATION / "verify_closed_loop.yaml").read_text(encoding="utf-8")
+    firmware = (ROOT / "firmware" / "esp32_mqtt" / "esp32_mqtt.ino").read_text(encoding="utf-8")
+
+    assert "MQTT TLS enabled with CA and hostname verification" in scenario
+    hardware_marker = 'Serial.println("Pump outputs: FEEDING");'
+    assert "Pump outputs: FEEDING" in scenario
+    assert hardware_marker in firmware
+    assert firmware.index(hardware_marker) < firmware.index("enqueueTelemetry(eventType, true, activeScheduleId);")
+    assert "completed: feeding_and_cleaning_completed" in scenario
+    assert "command-results <-" in scenario
+    for assertion in (
+        ("D33", 1),
+        ("D26", 1),
+        ("D27", 0),
+        ("D33", 0),
+        ("D26", 0),
+        ("D27", 1),
+    ):
+        pin, value = assertion
+        assert f"pin: {pin}\n      value: {value}" in scenario
+    assert "expected:" not in scenario
+
+
+def test_closed_loop_header_enables_verified_tls(tmp_path: Path) -> None:
+    output = tmp_path / "feeder_secrets.h"
+    environment = {
+        **os.environ,
+        "DEVICE_UID": "feeder-e2e-test",
+        "MQTT_SHARED_SECRET": "test-signing-secret",
+        "WOKWI_E2E_MQTT_HOST": "broker.hivemq.com",
+        "WOKWI_E2E_MQTT_PORT": "8883",
+    }
+    subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "generate_wokwi_e2e_header.py"), "--output", str(output)],
+        check=True,
+        cwd=ROOT,
+        env=environment,
+    )
+    header = output.read_text(encoding="utf-8")
+
+    assert '#define FEEDER_DEVICE_UID "feeder-e2e-test"' in header
+    assert '#define FEEDER_MQTT_HOST "broker.hivemq.com"' in header
+    assert "#define FEEDER_MQTT_PORT 8883" in header
+    assert "#define FEEDER_MQTT_USE_TLS 1" in header
+    assert "#define FEEDER_MQTT_TLS_INSECURE 0" in header
+    assert "-----BEGIN CERTIFICATE-----\\n" in header

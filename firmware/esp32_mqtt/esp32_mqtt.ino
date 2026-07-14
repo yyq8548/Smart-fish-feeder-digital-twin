@@ -627,6 +627,10 @@ void completeActiveCommand(const char *result) {
     return;
   }
   const uint64_t completedCommandId = activeCommandId;
+  Serial.printf(
+      "Command %llu completed: %s\n",
+      static_cast<unsigned long long>(completedCommandId),
+      result);
   activeCommandKind = ActiveCommandKind::NONE;
   activeCommandId = 0;
   finishCommand(completedCommandId, "COMPLETED", result);
@@ -864,6 +868,10 @@ bool startFeedingCycle(
   activeCleanDurationMs = CLEAN_DURATION_MS;
   activeScheduleId = scheduleId;
   setPumpOutputs(true, true, false);
+  // Emit the hardware-state marker before MQTT publishing can block long
+  // enough for a short feed cycle to finish. Wokwi uses this line to inspect
+  // the GPIOs at the instant the forward pump phase begins.
+  Serial.println("Pump outputs: FEEDING");
   enqueueTelemetry(eventType, true, activeScheduleId);
   return true;
 }
@@ -1326,6 +1334,9 @@ void handleVerifiedCommand(
     }
     activeCommandKind = ActiveCommandKind::FEED_NOW;
     activeCommandId = commandId;
+    Serial.printf(
+        "Command %llu started: FEED_NOW\n",
+        static_cast<unsigned long long>(commandId));
     return;
   }
 

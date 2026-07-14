@@ -1,0 +1,76 @@
+name: 'Dashboard to Wokwi ESP32 closed loop'
+version: 1
+author: 'Smart Fish Feeder Digital Control'
+steps:
+  - wait-serial: 'MQTT TLS enabled with CA and hostname verification'
+  - wait-serial: 'Smart Fish Feeder ESP32 MQTT firmware started'
+  - wait-serial: 'MQTT connected to'
+
+  # The browser test submits FEED_NOW only after signed device telemetry makes
+  # the dashboard online. This marker is emitted immediately after the ESP32
+  # turns on the forward pump outputs and before any potentially blocking MQTT
+  # publish, so the short 500 ms feed phase can be inspected reliably.
+  - wait-serial: 'Pump outputs: FEEDING'
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0
+
+  # The dashboard requests the minimum 500 ms feed duration. The firmware then
+  # enforces its two-second all-off safety pause before reverse cleaning.
+  - delay: 700ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0
+  - delay: 2100ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 1
+
+  # Completion produces a signed command result on MQTT and returns all GPIOs
+  # to idle. Wait for the one-time serial event before checking the final pins;
+  # delaying first could miss the event and leave the scenario waiting forever.
+  # Keep the simulation alive through the actual MQTT publish (the completion
+  # line is emitted just before the result is queued), then allow broker
+  # delivery before the browser independently verifies the dashboard result.
+  - wait-serial: 'completed: feeding_and_cleaning_completed'
+  - wait-serial: 'command-results <-'
+  - delay: 1000ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0

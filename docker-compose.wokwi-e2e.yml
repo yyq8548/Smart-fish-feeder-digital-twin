@@ -1,0 +1,26 @@
+services:
+  backend:
+    environment:
+      FISH_FEEDER_MANUAL_COMMAND_TTL_SECONDS: "180"
+      FISH_FEEDER_OFFLINE_AFTER_SECONDS: "120"
+
+  mqtt-bridge:
+    environment:
+      MQTT_HOST: ${WOKWI_E2E_MQTT_HOST:-broker.hivemq.com}
+      MQTT_PORT: ${WOKWI_E2E_MQTT_PORT:-8883}
+      MQTT_CLIENT_ID: ${MQTT_CLIENT_ID:-fish-feeder-wokwi-e2e-bridge}
+      MQTT_USERNAME: ${WOKWI_E2E_MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${WOKWI_E2E_MQTT_PASSWORD:-}
+      MQTT_TLS_ENABLED: "true"
+      MQTT_TLS_INSECURE: "false"
+      COMMAND_POLL_SECONDS: "2"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import os,socket; socket.create_connection((os.environ['MQTT_HOST'], int(os.environ['MQTT_PORT'])), 5).close()
+      interval: 5s
+      timeout: 8s
+      retries: 12
+      start_period: 10s
