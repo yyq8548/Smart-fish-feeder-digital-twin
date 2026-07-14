@@ -127,14 +127,16 @@ ensure_unique \
   "$FISH_FEEDER_JWT_SECRET" \
   "$MQTT_SHARED_SECRET"
 
-temporary_file="$(mktemp /mosquitto/secrets/passwords.XXXXXX)"
-trap 'rm -f "$temporary_file"' EXIT INT TERM
+temporary_directory="$(mktemp -d /mosquitto/secrets/passwords.XXXXXX)"
+temporary_file="$temporary_directory/passwords"
+trap 'rm -f "$temporary_file"; rmdir "$temporary_directory" 2>/dev/null || true' EXIT INT TERM
 
 mosquitto_passwd -b -c "$temporary_file" "$MQTT_BRIDGE_USERNAME" "$MQTT_BRIDGE_PASSWORD"
 mosquitto_passwd -b "$temporary_file" "$MQTT_DEVICE_USERNAME" "$MQTT_DEVICE_PASSWORD"
 chmod 600 "$temporary_file"
 chown 1883:1883 "$temporary_file"
 mv -f "$temporary_file" /mosquitto/secrets/passwords
+rmdir "$temporary_directory"
 trap - EXIT INT TERM
 
 echo "Mosquitto password file initialized for bridge and ${MQTT_DEVICE_USERNAME}."
