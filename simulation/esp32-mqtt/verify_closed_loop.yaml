@@ -7,9 +7,10 @@ steps:
   - wait-serial: 'MQTT connected to'
 
   # The browser test submits FEED_NOW only after signed device telemetry makes
-  # the dashboard online. This serial event is emitted after the ESP32 accepts
-  # the signed MQTT command and turns on the forward pump outputs.
-  - wait-serial: 'started: FEED_NOW'
+  # the dashboard online. This marker is emitted immediately after the ESP32
+  # turns on the forward pump outputs and before any potentially blocking MQTT
+  # publish, so the short 500 ms feed phase can be inspected reliably.
+  - wait-serial: 'Pump outputs: FEEDING'
   - expect-pin:
       part-id: esp
       pin: D33

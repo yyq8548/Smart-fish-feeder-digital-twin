@@ -868,6 +868,10 @@ bool startFeedingCycle(
   activeCleanDurationMs = CLEAN_DURATION_MS;
   activeScheduleId = scheduleId;
   setPumpOutputs(true, true, false);
+  // Emit the hardware-state marker before MQTT publishing can block long
+  // enough for a short feed cycle to finish. Wokwi uses this line to inspect
+  // the GPIOs at the instant the forward pump phase begins.
+  Serial.println("Pump outputs: FEEDING");
   enqueueTelemetry(eventType, true, activeScheduleId);
   return true;
 }

@@ -97,9 +97,17 @@ def test_wokwi_scenario_covers_boundaries_and_pump_phases() -> None:
 
 def test_closed_loop_scenario_proves_command_gpio_and_completion() -> None:
     scenario = (SIMULATION / "verify_closed_loop.yaml").read_text(encoding="utf-8")
+    firmware = (ROOT / "firmware" / "esp32_mqtt" / "esp32_mqtt.ino").read_text(
+        encoding="utf-8"
+    )
 
     assert "MQTT TLS enabled with CA and hostname verification" in scenario
-    assert "started: FEED_NOW" in scenario
+    hardware_marker = 'Serial.println("Pump outputs: FEEDING");'
+    assert "Pump outputs: FEEDING" in scenario
+    assert hardware_marker in firmware
+    assert firmware.index(hardware_marker) < firmware.index(
+        "enqueueTelemetry(eventType, true, activeScheduleId);"
+    )
     assert "completed: feeding_and_cleaning_completed" in scenario
     for assertion in (
         ("D33", 1),
