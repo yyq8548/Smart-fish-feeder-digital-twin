@@ -2,8 +2,8 @@ name: 'Dashboard to Wokwi ESP32 closed loop'
 version: 1
 author: 'Smart Fish Feeder Digital Control'
 steps:
-  - wait-serial: 'Smart Fish Feeder ESP32 MQTT firmware started'
   - wait-serial: 'MQTT TLS enabled with CA and hostname verification'
+  - wait-serial: 'Smart Fish Feeder ESP32 MQTT firmware started'
   - wait-serial: 'MQTT connected to'
 
   # The browser test submits FEED_NOW only after signed device telemetry makes
