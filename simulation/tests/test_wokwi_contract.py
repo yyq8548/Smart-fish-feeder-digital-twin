@@ -84,6 +84,7 @@ def test_wokwi_scenario_covers_boundaries_and_pump_phases() -> None:
     for temperature in ("6.0", "5.0", "2.5"):
         assert f"value: {temperature}" in scenario
     assert "part-id: manualFeed" in scenario
+    assert "delay: 500ms" in scenario
     assert "value: 1" in scenario
     assert "value: 0" in scenario
     for pin in (25, 26, 27, 33):
