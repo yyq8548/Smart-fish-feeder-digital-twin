@@ -1,0 +1,70 @@
+name: 'Dashboard to Wokwi ESP32 closed loop'
+version: 1
+author: 'Smart Fish Feeder Digital Control'
+steps:
+  - wait-serial: 'Smart Fish Feeder ESP32 MQTT firmware started'
+  - wait-serial: 'MQTT TLS enabled with CA and hostname verification'
+  - wait-serial: 'MQTT connected to'
+
+  # The browser test submits FEED_NOW only after signed device telemetry makes
+  # the dashboard online. This serial event is emitted after the ESP32 accepts
+  # the signed MQTT command and turns on the forward pump outputs.
+  - wait-serial: 'started: FEED_NOW'
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0
+
+  # The dashboard requests the minimum 500 ms feed duration. The firmware then
+  # enforces its two-second all-off safety pause before reverse cleaning.
+  - delay: 700ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0
+  - delay: 2100ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 1
+
+  # Completion produces a signed command result on MQTT and returns all GPIOs
+  # to idle. The browser independently waits for that result in the dashboard.
+  - delay: 10100ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0
+  - wait-serial: 'completed: feeding_and_cleaning_completed'

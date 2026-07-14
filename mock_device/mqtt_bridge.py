@@ -312,6 +312,10 @@ def complete_command(payload: dict[str, object], device_uid: str) -> None:
         json_body=body,
         headers=_headers(device_uid),
     )
+    print(
+        f"Accepted signed command result for {device_uid} command {command_id}: {body['status']}",
+        flush=True,
+    )
 
 
 def on_connect(

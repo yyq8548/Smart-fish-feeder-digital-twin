@@ -627,6 +627,10 @@ void completeActiveCommand(const char *result) {
     return;
   }
   const uint64_t completedCommandId = activeCommandId;
+  Serial.printf(
+      "Command %llu completed: %s\n",
+      static_cast<unsigned long long>(completedCommandId),
+      result);
   activeCommandKind = ActiveCommandKind::NONE;
   activeCommandId = 0;
   finishCommand(completedCommandId, "COMPLETED", result);
@@ -1326,6 +1330,9 @@ void handleVerifiedCommand(
     }
     activeCommandKind = ActiveCommandKind::FEED_NOW;
     activeCommandId = commandId;
+    Serial.printf(
+        "Command %llu started: FEED_NOW\n",
+        static_cast<unsigned long long>(commandId));
     return;
   }
 

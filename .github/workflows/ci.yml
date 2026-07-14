@@ -72,6 +72,64 @@ jobs:
         if: env.WOKWI_CLI_TOKEN == ''
         run: echo "Wokwi runtime test skipped; configure the WOKWI_CLI_TOKEN repository secret to enable it."
 
+  closed-loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WOKWI_CLI_TOKEN: ${{ secrets.WOKWI_CLI_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect optional Wokwi token
+        id: wokwi
+        run: |
+          if [[ -n "$WOKWI_CLI_TOKEN" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: arduino/setup-arduino-cli@v2
+        if: steps.wokwi.outputs.enabled == 'true'
+      - name: Install ESP32 compiler and firmware libraries
+        if: steps.wokwi.outputs.enabled == 'true'
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+          arduino-cli lib install ArduinoJson DallasTemperature OneWire PubSubClient
+      - uses: actions/setup-node@v4
+        if: steps.wokwi.outputs.enabled == 'true'
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        if: steps.wokwi.outputs.enabled == 'true'
+        with:
+          version: 11
+      - name: Install dashboard browser test
+        if: steps.wokwi.outputs.enabled == 'true'
+        working-directory: dashboard
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+      - name: Install Wokwi CLI
+        if: steps.wokwi.outputs.enabled == 'true'
+        run: |
+          sudo wget -q -O /usr/local/bin/wokwi-cli https://github.com/wokwi/wokwi-cli/releases/latest/download/wokwi-cli-linuxstatic-x64
+          sudo chmod +x /usr/local/bin/wokwi-cli
+      - name: Run dashboard-to-Wokwi closed loop
+        if: steps.wokwi.outputs.enabled == 'true'
+        run: bash scripts/wokwi-closed-loop.sh
+      - name: Upload closed-loop diagnostics
+        if: always() && steps.wokwi.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wokwi-closed-loop-diagnostics
+          path: |
+            build/wokwi/closed-loop-*.log
+            dashboard/test-results
+          if-no-files-found: ignore
+      - name: Report optional closed-loop test
+        if: steps.wokwi.outputs.enabled != 'true'
+        run: echo "Closed-loop Wokwi test skipped; configure WOKWI_CLI_TOKEN to enable it."
+
   security:
     runs-on: ubuntu-latest
     steps:

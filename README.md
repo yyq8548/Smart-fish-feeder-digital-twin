@@ -132,6 +132,39 @@ bash scripts/compose-smoke.sh
 
 Follow the [physical commissioning checklist](docs/physical_commissioning.md) for the required firmware-first upgrade order and failure tests.
 
+## Run the dashboard-to-ESP32 closed loop
+
+The optional closed-loop test proves the entire control path with the real
+dashboard and firmware instead of synthesizing either side:
+
+```text
+Chromium dashboard -> FastAPI -> MQTT bridge -> verified MQTT TLS
+  -> Wokwi ESP32 GPIO -> signed result -> FastAPI -> dashboard
+```
+
+It creates a unique device UID and random HMAC/API credentials, builds and
+starts the complete Compose stack, compiles the ESP32 firmware with certificate
+and hostname verification, runs Wokwi concurrently, and submits a 500 ms
+`FEED_NOW` from Chromium. Wokwi asserts forward-pump, safety-pause,
+reverse-clean, and final-idle GPIO states. The browser asserts that the command
+was accepted as `PENDING` and later renders `COMPLETED` with
+`feeding_and_cleaning_completed` after the bridge validates the signed result.
+
+Prerequisites are Docker, Arduino CLI with the ESP32 core and libraries, pnpm
+with the Playwright Chromium browser, Wokwi CLI, and `WOKWI_CLI_TOKEN`:
+
+```bash
+bash scripts/wokwi-closed-loop.sh
+```
+
+The default test transport is `broker.hivemq.com:8883` with the Amazon root CA,
+TLS 1.2+, certificate/hostname verification, unique per-run topics, and HMAC
+authentication for every application message. This public test broker does not
+provide private topic ACLs, so it is not a production substitute. To use an
+internet-reachable authenticated broker, set `WOKWI_E2E_MQTT_HOST`,
+`WOKWI_E2E_MQTT_PORT`, `WOKWI_E2E_MQTT_USERNAME`,
+`WOKWI_E2E_MQTT_PASSWORD`, and `WOKWI_E2E_MQTT_ROOT_CA_FILE`.
+
 ## Production cloud deployment
 
 The production profile places the control board and API behind HTTPS and exposes only the authenticated MQTT/TLS listener on port `8883`. Backend, dashboard, bridge, database, and plaintext broker traffic stay on private Docker networks.
@@ -199,8 +232,9 @@ GitHub Actions runs the following on every pull request:
 
 - Ruff formatting and linting
 - Strict mypy type checking
-- 64 Python backend, MQTT transport, and Wokwi contract tests
+- 66 Python backend, MQTT transport, and Wokwi contract tests
 - 20 dashboard tests with API failure and empty-state coverage
+- Browser-driven dashboard-to-Wokwi closed-loop verification
 - Python and JavaScript dependency vulnerability audits
 - Plaintext and verified-TLS ESP32 firmware compilation
 - Wokwi sensor, hysteresis, and pump-cycle simulation when the CI token is configured
