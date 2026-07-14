@@ -158,5 +158,7 @@ jobs:
       - run: docker compose config --quiet
       - run: docker compose --env-file .env.production.example -f docker-compose.production.yml config --quiet
       - run: sh -n deploy/mosquitto/init-passwords.sh
+      - name: Test Mosquitto 2.1 password initialization
+        run: sh scripts/test-mosquitto-init.sh
       - name: Build and smoke-test Compose stack
         run: bash scripts/compose-smoke.sh
