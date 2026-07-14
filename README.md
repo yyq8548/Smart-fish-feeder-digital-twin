@@ -8,11 +8,10 @@
 
 An online control board for monitoring and operating a physical ESP32 fish feeder from a browser. It combines a responsive dashboard, FastAPI backend, persistent database, authenticated MQTT broker, ESP32 firmware, automated testing, and a production Docker deployment.
 
-The dashboard is not a disconnected mockup. A control request becomes a durable backend command, travels to the feeder over MQTT/TLS, actuates GPIO-connected hardware, and returns a signed completion result to the website.
-
 ## Live website
 
 **Control board:** [https://feeder.smartfishfeeder.org](https://feeder.smartfishfeeder.org)
+**Physical Device:** (https://drive.google.com/file/d/1-BNHRS8WrIlX6UmlVeAYz3xfRProdbw3/view?usp=sharing)
 
 The website includes a public, isolated demo with realistic sample telemetry and simulated device controls:
 
@@ -23,32 +22,6 @@ password: smartfishdemo
 
 Select **Try demo** on the sign-in panel for one-click access. The demo account cannot view production devices or telemetry, provision hardware, rotate credentials, modify schedules, acknowledge production alerts, run reliability jobs, or send commands to the physical ESP32. Production usernames, passwords, device credentials, and signing secrets remain private.
 
-### What the public demo includes
-
-| Demo feature | What visitors can see or do |
-| --- | --- |
-| Simulated feeder | One online device named **Public Demo Feeder** with UID `demo-feeder-001` |
-| Sample telemetry | 12 generated reservoir readings from 4.2 &deg;C to 5.6 &deg;C, including cooling and pump-state changes |
-| Sample alert | A resolved warning showing how a 5.6 &deg;C temperature excursion appears |
-| Command history | Completed automatic-cooling, pump-cleaning, and feeding examples |
-| Interactive controls | Submit feed, clean, and cooling commands and immediately see a simulated `COMPLETED` result |
-
-The public demo is deliberately separated from the physical control path. Its commands are held only in server memory, never written to the production command database, and never published to the MQTT broker. Demo sessions cannot discover real device identifiers or data: production-device reads return `404`, and production mutations return `403`. Synthetic data is regenerated and interactive demo history resets whenever the backend restarts.
-
-> **Demo safety:** A successful demo command proves the website workflow, not that a physical feeder moved. Only a private operator account can issue durable commands to an authenticated ESP32.
-
-| Service | Address | Purpose |
-| --- | --- | --- |
-| Web control board | `https://feeder.smartfishfeeder.org` | Operator monitoring and physical-device controls |
-| Health check | `https://feeder.smartfishfeeder.org/health` | Dashboard availability |
-| Backend API | `https://feeder.smartfishfeeder.org/api` | Authenticated application API |
-| ESP32 broker | `mqtt.smartfishfeeder.org:8883` | Authenticated MQTT over TLS |
-
-![Authenticated control board showing the selected feeder](docs/images/control-board-overview.png)
-
-The dashboard shows the selected feeder's temperature, cooling output, pump state, last accepted event, recent telemetry, alerts, and command history.
-
-![Physical controls and completed command history](docs/images/control-board-demo.png)
 
 ## Website user manual
 
@@ -145,7 +118,32 @@ Select **Sign out** when finished, especially on a shared computer. Closing the 
 
 The backend also supports timezone-aware feeding schedules, missed-feeding detection, alert acknowledgement, credential rotation, and device provisioning through its authenticated API.
 
-## Connect a physical ESP32
+### What the public demo includes
+
+| Demo feature | What visitors can see or do |
+| --- | --- |
+| Simulated feeder | One online device named **Public Demo Feeder** with UID `demo-feeder-001` |
+| Sample telemetry | 12 generated reservoir readings from 4.2 &deg;C to 5.6 &deg;C, including cooling and pump-state changes |
+| Sample alert | A resolved warning showing how a 5.6 &deg;C temperature excursion appears |
+| Command history | Completed automatic-cooling, pump-cleaning, and feeding examples |
+| Interactive controls | Submit feed, clean, and cooling commands and immediately see a simulated `COMPLETED` result |
+
+The public demo is deliberately separated from the physical control path. Its commands are held only in server memory, never written to the production command database, and never published to the MQTT broker. Demo sessions cannot discover real device identifiers or data: production-device reads return `404`, and production mutations return `403`. Synthetic data is regenerated and interactive demo history resets whenever the backend restarts.
+
+> **Demo safety:** A successful demo command proves the website workflow, not that a physical feeder moved. Only a private operator account can issue durable commands to an authenticated ESP32.
+
+| Service | Address | Purpose |
+| --- | --- | --- |
+| Web control board | `https://feeder.smartfishfeeder.org` | Operator monitoring and physical-device controls |
+| Health check | `https://feeder.smartfishfeeder.org/health` | Dashboard availability |
+| Backend API | `https://feeder.smartfishfeeder.org/api` | Authenticated application API |
+| ESP32 broker | `mqtt.smartfishfeeder.org:8883` | Authenticated MQTT over TLS |
+
+![Authenticated control board showing the selected feeder](docs/images/control-board-overview.png)
+
+The dashboard shows the selected feeder's temperature, cooling output, pump state, last accepted event, recent telemetry, alerts, and command history.
+
+![Physical controls and completed command history](docs/images/control-board-demo.png)## Connect a physical ESP32
 
 The ESP32 connects directly to the production broker over Wi-Fi; it does not need to remain connected to a computer after flashing.
 
@@ -211,54 +209,6 @@ Commands are short-lived and non-retained. The ESP32 verifies the HMAC-SHA256 si
 
 Software safeguards do not replace fuses, isolation, current limits, electrical protection, or supervised commissioning.
 
-## Run the complete local demo
-
-Requirements: Docker with Compose v2.
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-Open:
-
-- Control board: <http://localhost:8080>
-- FastAPI: <http://localhost:8000>
-- Swagger UI: <http://localhost:8000/docs>
-
-Local demonstration account:
-
-```text
-username: admin
-password: local-development-admin-password
-```
-
-These credentials and the local MQTT settings are for development only. Never expose the development Compose profile to the internet or use its default secrets on physical hardware.
-
-Run the same Compose smoke test used by CI:
-
-```bash
-bash scripts/compose-smoke.sh
-```
-
-## Run the virtual-hardware closed loop
-
-The Wokwi test proves the complete path with the real dashboard and compiled ESP32 firmware:
-
-```text
-Chromium dashboard -> FastAPI -> MQTT bridge -> verified MQTT TLS
-  -> Wokwi ESP32 GPIO -> signed result -> FastAPI -> dashboard
-```
-
-It submits `FEED_NOW`, verifies the forward-pump, safety-pause, reverse-clean, and final-idle GPIO states, validates the signed device result, and confirms that the website changes from `PENDING` to `COMPLETED`.
-
-Prerequisites include Docker, Arduino CLI with ESP32 support, pnpm, Playwright Chromium, Wokwi CLI, and `WOKWI_CLI_TOKEN`.
-
-```bash
-bash scripts/wokwi-closed-loop.sh
-```
-
-See the [Wokwi ESP32 guide](simulation/esp32-mqtt/README.md) for setup and broker options.
 
 ## Production deployment
 
@@ -341,6 +291,5 @@ docker-compose.production.yml  HTTPS and MQTT/TLS production stack
 
 ## Additional demonstrations
 
-- [Original physical feeder prototype](https://drive.google.com/file/d/1-BNHRS8WrIlX6UmlVeAYz3xfRProdbw3/view?usp=sharing)
 - [Original Arduino/Wokwi simulation](https://wokwi.com/projects/468425567572330497)
 - [ESP32 MQTT simulation instructions](simulation/esp32-mqtt/README.md)
