@@ -12,6 +12,37 @@ DS18B20 + button <-> ESP32 <-> MQTT <-> MQTT bridge <-> FastAPI/dashboard
 - `../../firmware/esp32_mqtt/esp32_mqtt.ino` - the single firmware source
 - `diagram.json` - ESP32, DS18B20, button, and output indicators
 - `libraries.txt` - Arduino libraries installed by Wokwi
+- `wokwi.toml` - local Wokwi for VS Code/CLI configuration
+- `verify_feeder.yaml` - automated hysteresis and pump-cycle scenario
+
+## Run it directly from this repository
+
+Install Arduino CLI, the ESP32 core, the four libraries in `libraries.txt`, and
+either Wokwi for VS Code or Wokwi CLI. From the repository root, compile the
+firmware into the location referenced by `wokwi.toml`:
+
+```bash
+arduino-cli core install esp32:esp32
+arduino-cli lib install ArduinoJson DallasTemperature OneWire PubSubClient
+arduino-cli compile \
+  --fqbn esp32:esp32:esp32 \
+  --build-path build/wokwi \
+  firmware/esp32_mqtt
+```
+
+Open `simulation/esp32-mqtt/diagram.json` with Wokwi for VS Code and start the
+simulator, or run the automated hardware-in-the-loop scenario:
+
+```bash
+wokwi-cli simulation/esp32-mqtt \
+  --scenario verify_feeder.yaml \
+  --timeout 45000
+```
+
+Wokwi CLI requires `WOKWI_CLI_TOKEN`. The same scenario runs in GitHub Actions
+when that repository secret is configured. The non-token contract tests still
+run on every pull request and verify that the diagram wiring, firmware pin
+constants, Wokwi configuration, and scenario coverage remain aligned.
 
 ## Run it in Wokwi
 
@@ -81,6 +112,8 @@ The public Wokwi gateway cannot reach a broker bound only to your computer.
 - Move it to 2.5 C. Cooling turns off.
 - Press the green button. The green/yellow LEDs show a 10-second feed, followed
   by a 2-second wait and a 10-second red/yellow reverse-clean cycle.
+- Press `F` while the diagram has focus as a keyboard shortcut for the manual
+  feed button.
 - The backend evaluates schedule timezones and due times. Its bridge dispatches
   a signed `FEED_NOW` with `schedule_id`; the device does not independently
   trigger schedules and therefore cannot double-feed because of clock or

@@ -1,0 +1,4 @@
+[wokwi]
+version = 1
+firmware = '../../build/wokwi/esp32_mqtt.ino.bin'
+elf = '../../build/wokwi/esp32_mqtt.ino.elf'

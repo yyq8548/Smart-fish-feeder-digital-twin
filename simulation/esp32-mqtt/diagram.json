@@ -36,7 +36,9 @@
       "left": -180,
       "attrs": {
         "color": "green",
-        "label": "Manual Feed"
+        "label": "Manual Feed",
+        "key": "F",
+        "bounce": "0"
       }
     },
     {

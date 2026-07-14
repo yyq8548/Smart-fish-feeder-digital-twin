@@ -1,0 +1,111 @@
+name: 'Smart feeder sensor and actuator verification'
+version: 1
+author: 'Smart Fish Feeder Digital Control'
+steps:
+  - wait-serial: 'Smart Fish Feeder ESP32 MQTT firmware started'
+  - delay: 2500ms
+
+  # The initial 4 C reading is inside the 3-5 C hysteresis band.
+  - expect-pin:
+      part-id: esp
+      pin: D25
+      value: 0
+
+  # Above 5 C enables cooling.
+  - set-control:
+      part-id: temperature
+      control: temperature
+      value: 6.0
+  - delay: 2500ms
+  - expect-pin:
+      part-id: esp
+      pin: D25
+      value: 1
+
+  # Exactly 5 C keeps the previous cooling state.
+  - set-control:
+      part-id: temperature
+      control: temperature
+      value: 5.0
+  - delay: 2500ms
+  - expect-pin:
+      part-id: esp
+      pin: D25
+      value: 1
+
+  # Below 3 C disables cooling.
+  - set-control:
+      part-id: temperature
+      control: temperature
+      value: 2.5
+  - delay: 2500ms
+  - expect-pin:
+      part-id: esp
+      pin: D25
+      value: 0
+
+  # A local button press starts forward feeding.
+  - set-control:
+      part-id: manualFeed
+      control: pressed
+      value: 1
+  # Hold beyond both the 50 ms debounce window and a blocking sensor read.
+  - delay: 500ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0
+  - set-control:
+      part-id: manualFeed
+      control: pressed
+      value: 0
+
+  # Forward feed ends, followed by the two-second safety pause.
+  - delay: 10100ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0
+  # Reverse cleaning then runs and returns all pump outputs to idle.
+  - delay: 2100ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 1
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 1
+  - delay: 10100ms
+  - expect-pin:
+      part-id: esp
+      pin: D33
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D26
+      value: 0
+  - expect-pin:
+      part-id: esp
+      pin: D27
+      value: 0

@@ -46,6 +46,8 @@ jobs:
 
   firmware:
     runs-on: ubuntu-latest
+    env:
+      WOKWI_CLI_TOKEN: ${{ secrets.WOKWI_CLI_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: arduino/setup-arduino-cli@v2
@@ -53,11 +55,22 @@ jobs:
       - run: arduino-cli core install esp32:esp32
       - run: arduino-cli lib install ArduinoJson DallasTemperature OneWire PubSubClient
       - name: Compile plaintext Wokwi firmware
-        run: arduino-cli compile --fqbn esp32:esp32:esp32 --build-path /tmp/esp32-plaintext firmware/esp32_mqtt
+        run: arduino-cli compile --fqbn esp32:esp32:esp32 --build-path build/wokwi firmware/esp32_mqtt
       - name: Compile verified-TLS physical firmware
         run: |
           cp firmware/esp32_mqtt/feeder_secrets.example.h firmware/esp32_mqtt/feeder_secrets.h
           arduino-cli compile --fqbn esp32:esp32:esp32 --build-path /tmp/esp32-tls firmware/esp32_mqtt
+      - name: Run Wokwi sensor and actuator scenario
+        if: env.WOKWI_CLI_TOKEN != ''
+        uses: wokwi/wokwi-ci-action@v1
+        with:
+          token: ${{ secrets.WOKWI_CLI_TOKEN }}
+          path: simulation/esp32-mqtt
+          timeout: 45000
+          scenario: verify_feeder.yaml
+      - name: Report optional Wokwi runtime test
+        if: env.WOKWI_CLI_TOKEN == ''
+        run: echo "Wokwi runtime test skipped; configure the WOKWI_CLI_TOKEN repository secret to enable it."
 
   security:
     runs-on: ubuntu-latest

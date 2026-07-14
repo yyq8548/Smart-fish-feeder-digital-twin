@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-testpaths = ["backend/tests", "mock_device/tests"]
+testpaths = ["backend/tests", "mock_device/tests", "simulation/tests"]
 addopts = "--basetemp=.pytest-tmp --cov=backend/app --cov-report=term-missing --cov-fail-under=85"
 pythonpath = [".", "backend"]
 

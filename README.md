@@ -199,10 +199,11 @@ GitHub Actions runs the following on every pull request:
 
 - Ruff formatting and linting
 - Strict mypy type checking
-- 60 Python backend and MQTT transport tests
+- 64 Python backend, MQTT transport, and Wokwi contract tests
 - 20 dashboard tests with API failure and empty-state coverage
 - Python and JavaScript dependency vulnerability audits
 - Plaintext and verified-TLS ESP32 firmware compilation
+- Wokwi sensor, hysteresis, and pump-cycle simulation when the CI token is configured
 - Development and production Docker configuration validation
 - Complete Docker Compose build and end-to-end smoke test
 
