@@ -23,6 +23,20 @@ password: smartfishdemo
 
 Select **Try demo** on the sign-in panel for one-click access. The demo account cannot view production devices or telemetry, provision hardware, rotate credentials, modify schedules, acknowledge production alerts, run reliability jobs, or send commands to the physical ESP32. Production usernames, passwords, device credentials, and signing secrets remain private.
 
+### What the public demo includes
+
+| Demo feature | What visitors can see or do |
+| --- | --- |
+| Simulated feeder | One online device named **Public Demo Feeder** with UID `demo-feeder-001` |
+| Sample telemetry | 12 generated reservoir readings from 4.2 &deg;C to 5.6 &deg;C, including cooling and pump-state changes |
+| Sample alert | A resolved warning showing how a 5.6 &deg;C temperature excursion appears |
+| Command history | Completed automatic-cooling, pump-cleaning, and feeding examples |
+| Interactive controls | Submit feed, clean, and cooling commands and immediately see a simulated `COMPLETED` result |
+
+The public demo is deliberately separated from the physical control path. Its commands are held only in server memory, never written to the production command database, and never published to the MQTT broker. Demo sessions cannot discover real device identifiers or data: production-device reads return `404`, and production mutations return `403`. Synthetic data is regenerated and interactive demo history resets whenever the backend restarts.
+
+> **Demo safety:** A successful demo command proves the website workflow, not that a physical feeder moved. Only a private operator account can issue durable commands to an authenticated ESP32.
+
 | Service | Address | Purpose |
 | --- | --- | --- |
 | Web control board | `https://feeder.smartfishfeeder.org` | Operator monitoring and physical-device controls |
