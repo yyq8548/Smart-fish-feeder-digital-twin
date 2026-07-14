@@ -16,7 +16,7 @@ This is the online control board for the smart fish feeder. It combines a respon
 
 **Control board:** [https://feeder.smartfishfeeder.org](https://feeder.smartfishfeeder.org)
 
-**Physical Device:**
+**Physical Device Demo:**
 
 [![Watch the physical smart fish feeder demo](https://img.youtube.com/vi/YY09H4AA6kg/maxresdefault.jpg)](https://youtu.be/YY09H4AA6kg)
 
