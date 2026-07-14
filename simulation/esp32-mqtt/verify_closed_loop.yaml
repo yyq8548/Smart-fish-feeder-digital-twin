@@ -53,8 +53,10 @@ steps:
       value: 1
 
   # Completion produces a signed command result on MQTT and returns all GPIOs
-  # to idle. The browser independently waits for that result in the dashboard.
-  - delay: 10100ms
+  # to idle. Wait for the one-time serial event before checking the final pins;
+  # delaying first could miss the event and leave the scenario waiting forever.
+  # The browser independently waits for the result in the dashboard.
+  - wait-serial: 'completed: feeding_and_cleaning_completed'
   - expect-pin:
       part-id: esp
       pin: D33
@@ -67,4 +69,3 @@ steps:
       part-id: esp
       pin: D27
       value: 0
-  - wait-serial: 'completed: feeding_and_cleaning_completed'
