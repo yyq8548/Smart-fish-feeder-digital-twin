@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f2f1ec" />
   <meta name="description" content="Secure cloud control board for an ESP32 smart fish feeder." />
   <title>Smart Fish Feeder Control Board</title>
-  <link rel="stylesheet" href="style.css?v=halo-2" />
+  <link rel="stylesheet" href="style.css?v=accounts-1" />
 </head>
 <body>
   <div class="ambient ambient-one" aria-hidden="true"></div>
@@ -151,10 +151,14 @@
       </div>
 
       <div class="session-actions">
+        <div class="auth-mode-switch" id="authModeSwitch" role="tablist" aria-label="Account access">
+          <button type="button" role="tab" aria-selected="true" data-auth-mode="signin">Sign in</button>
+          <button type="button" role="tab" aria-selected="false" data-auth-mode="signup">Create account</button>
+        </div>
         <form id="loginForm" class="login-form">
           <label>
-            <span>Username</span>
-            <input name="username" autocomplete="username" placeholder="Operator ID" required />
+            <span>Email or username</span>
+            <input name="username" autocomplete="username" placeholder="you@example.com" required />
           </label>
           <label>
             <span>Password</span>
@@ -164,6 +168,59 @@
             Sign in
             <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6" /></svg>
           </button>
+          <button class="auth-text-button" id="forgotPasswordButton" type="button">Forgot password?</button>
+        </form>
+
+        <form id="registrationForm" class="login-form account-form" hidden>
+          <div class="account-form-heading">
+            <span class="label">New customer</span>
+            <p>Create your private dashboard, then pair the code supplied with your feeder.</p>
+          </div>
+          <label>
+            <span>Email</span>
+            <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+          </label>
+          <label>
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="new-password" minlength="12"
+              placeholder="12+ characters" required />
+          </label>
+          <label>
+            <span>Confirm password</span>
+            <input name="password_confirm" type="password" autocomplete="new-password" minlength="12" required />
+          </label>
+          <p class="password-guidance">Use at least 12 characters with uppercase, lowercase, and a number.</p>
+          <button class="button primary" type="submit">Create account</button>
+        </form>
+
+        <form id="passwordResetRequestForm" class="login-form account-form" hidden>
+          <div class="account-form-heading">
+            <span class="label">Account recovery</span>
+            <p>We will email a time-limited password reset link.</p>
+          </div>
+          <label>
+            <span>Email</span>
+            <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required />
+          </label>
+          <button class="button primary" type="submit">Send reset link</button>
+          <button class="auth-text-button" type="button" data-auth-mode="signin">Back to sign in</button>
+        </form>
+
+        <form id="passwordResetConfirmForm" class="login-form account-form" hidden>
+          <div class="account-form-heading">
+            <span class="label">Choose a new password</span>
+            <p>This reset link can be used only once.</p>
+          </div>
+          <input name="token" type="hidden" />
+          <label>
+            <span>New password</span>
+            <input name="password" type="password" autocomplete="new-password" minlength="12" required />
+          </label>
+          <label>
+            <span>Confirm new password</span>
+            <input name="password_confirm" type="password" autocomplete="new-password" minlength="12" required />
+          </label>
+          <button class="button primary" type="submit">Update password</button>
         </form>
 
         <div id="demoAccess" class="demo-access">
@@ -189,11 +246,36 @@
               <strong id="operatorUsername"></strong>
             </span>
           </div>
-          <label class="device-picker">
+          <label class="device-picker" id="devicePicker">
             <span>Selected device</span>
             <select id="deviceSelect" aria-label="Selected device"></select>
           </label>
           <button class="button subtle" id="logoutButton" type="button">Sign out</button>
+        </div>
+
+        <div id="customerDevicePanel" class="customer-device-panel" hidden>
+          <div class="pairing-intro">
+            <span class="pairing-number" aria-hidden="true">01</span>
+            <div>
+              <span class="label">Connect a physical feeder</span>
+              <p id="pairingIntroText">Enter the device UID and one-time pairing code printed with your feeder.</p>
+            </div>
+          </div>
+          <form id="devicePairingForm" class="pairing-form">
+            <label>
+              <span>Device UID</span>
+              <input name="device_uid" autocomplete="off" placeholder="feeder-001" required />
+            </label>
+            <label>
+              <span>Pairing code</span>
+              <input name="pairing_code" autocomplete="one-time-code" placeholder="One-time code" required />
+            </label>
+            <button class="button primary" type="submit">Pair feeder</button>
+          </form>
+          <button class="auth-text-button danger-link" id="unpairDeviceButton" type="button" hidden>
+            Remove selected feeder from this account
+          </button>
+          <p id="pairingMessage" class="notice" aria-live="polite" hidden></p>
         </div>
       </div>
       <p id="loginMessage" class="notice session-notice" aria-live="polite" hidden></p>
@@ -449,6 +531,6 @@
     </div>
   </dialog>
 
-  <script type="module" src="app.js?v=halo-2"></script>
+  <script type="module" src="app.js?v=accounts-1"></script>
 </body>
 </html>

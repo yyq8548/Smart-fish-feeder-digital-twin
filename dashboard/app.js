@@ -105,7 +105,7 @@ export function populateDeviceSelect(element, devices, preferredUid = DEFAULT_DE
   }
   const selected = devices.find((device) => device.device_uid === preferredUid) ?? devices[0];
   if (selected) element.value = selected.device_uid;
-  return selected?.device_uid ?? preferredUid;
+  return selected?.device_uid ?? null;
 }
 
 export async function requestJson(
@@ -142,6 +142,48 @@ export async function authenticateOperator(
   const response = await requestJson("/auth/token", { fetchImpl, method: "POST", formBody: form });
   storage?.setItem(TOKEN_STORAGE_KEY, response.access_token);
   return response.access_token;
+}
+
+export function passwordsMatch(password, confirmation) {
+  if (password !== confirmation) throw new Error("Passwords do not match.");
+  return password;
+}
+
+export async function registerCustomer(email, password, { fetchImpl = fetch } = {}) {
+  return requestJson("/auth/register", {
+    fetchImpl,
+    method: "POST",
+    jsonBody: { email, password }
+  });
+}
+
+export async function verifyCustomerEmail(token, { fetchImpl = fetch } = {}) {
+  return requestJson("/auth/verify-email", { fetchImpl, method: "POST", jsonBody: { token } });
+}
+
+export async function requestCustomerPasswordReset(email, { fetchImpl = fetch } = {}) {
+  return requestJson("/auth/password-reset/request", {
+    fetchImpl,
+    method: "POST",
+    jsonBody: { email }
+  });
+}
+
+export async function confirmCustomerPasswordReset(token, password, { fetchImpl = fetch } = {}) {
+  return requestJson("/auth/password-reset/confirm", {
+    fetchImpl,
+    method: "POST",
+    jsonBody: { token, password }
+  });
+}
+
+export async function pairCustomerDevice(deviceUid, pairingCode, token, { fetchImpl = fetch } = {}) {
+  return requestJson("/devices/pair", {
+    fetchImpl,
+    method: "POST",
+    token,
+    jsonBody: { device_uid: deviceUid, pairing_code: pairingCode }
+  });
 }
 
 export function clearOperatorSession(storage = defaultStorage()) {
@@ -568,6 +610,7 @@ export function createDashboardController({
     token: storage?.getItem(TOKEN_STORAGE_KEY) ?? null,
     deviceUid: DEFAULT_DEVICE_UID,
     deviceId: null,
+    userRole: null,
     online: false,
     demo: false,
     busy: false,
@@ -610,11 +653,49 @@ export function createDashboardController({
     return state.viewEpoch === viewEpoch && state.token === token && state.deviceUid === deviceUid;
   }
 
+  function showAuthMode(mode) {
+    const modes = {
+      signin: "loginForm",
+      signup: "registrationForm",
+      reset: "passwordResetRequestForm",
+      "reset-confirm": "passwordResetConfirmForm"
+    };
+    for (const [name, id] of Object.entries(modes)) {
+      const form = documentRef.getElementById(id);
+      if (form) form.hidden = name !== mode;
+    }
+    for (const button of documentRef.querySelectorAll("[data-auth-mode]")) {
+      const selected = button.dataset.authMode === mode;
+      if (button.getAttribute("role") === "tab") button.setAttribute("aria-selected", String(selected));
+    }
+    const demoAccess = documentRef.getElementById("demoAccess");
+    if (demoAccess) demoAccess.hidden = mode !== "signin";
+  }
+
+  function setCustomerDeviceState(devices) {
+    const isCustomer = state.userRole === "customer";
+    const hasDevice = devices.length > 0;
+    const customerPanel = documentRef.getElementById("customerDevicePanel");
+    const devicePicker = documentRef.getElementById("devicePicker");
+    const unpairButton = documentRef.getElementById("unpairDeviceButton");
+    const intro = documentRef.getElementById("pairingIntroText");
+    if (customerPanel) customerPanel.hidden = !isCustomer;
+    if (devicePicker) devicePicker.hidden = isCustomer && !hasDevice;
+    if (unpairButton) unpairButton.hidden = !isCustomer || !hasDevice;
+    if (intro) {
+      intro.textContent = hasDevice
+        ? "Pair another feeder, or remove the selected feeder before transferring it to someone else."
+        : "Enter the device UID and one-time pairing code printed with your feeder.";
+    }
+  }
+
   function setAuthenticated(authenticated, username = "", role = "operator") {
     const loginForm = documentRef.getElementById("loginForm");
     const operatorSession = documentRef.getElementById("operatorSession");
+    const authModeSwitch = documentRef.getElementById("authModeSwitch");
     if (loginForm) loginForm.hidden = authenticated;
     if (operatorSession) operatorSession.hidden = !authenticated;
+    if (authModeSwitch) authModeSwitch.hidden = authenticated;
     const usernameElement = documentRef.getElementById("operatorUsername");
     if (usernameElement) usernameElement.textContent = username;
     const demoAccess = documentRef.getElementById("demoAccess");
@@ -623,14 +704,21 @@ export function createDashboardController({
     if (demoModeBanner) demoModeBanner.hidden = !authenticated || role !== "demo";
     documentRef.body.dataset.authenticated = String(authenticated);
     documentRef.body.dataset.accountRole = authenticated ? role : "anonymous";
+    if (!authenticated) {
+      state.userRole = null;
+      setCustomerDeviceState([]);
+      showAuthMode("signin");
+    }
   }
 
   function updateControlAvailability() {
-    const enabled = Boolean(state.token && state.online && !state.busy);
+    const enabled = Boolean(state.token && state.deviceUid && state.online && !state.busy);
     for (const button of documentRef.querySelectorAll("[data-command], [data-scene-command]")) button.disabled = !enabled;
     for (const input of documentRef.querySelectorAll("[data-duration-control]")) input.disabled = !enabled;
     const message = !state.token
-      ? "Sign in as an operator to issue commands."
+      ? "Sign in to issue commands."
+      : !state.deviceUid
+        ? "Pair a feeder to enable live controls."
       : !state.online
         ? "Commands are disabled because the selected device is offline."
         : state.busy
@@ -646,7 +734,7 @@ export function createDashboardController({
     const viewEpoch = state.viewEpoch;
     const token = state.token;
     const deviceUid = state.deviceUid;
-    if (!token) {
+    if (!token || !deviceUid) {
       renderCommands(documentRef.getElementById("commandHistory"), []);
       return [];
     }
@@ -672,7 +760,7 @@ export function createDashboardController({
     const viewEpoch = state.viewEpoch;
     const token = state.token;
     const deviceUid = state.deviceUid;
-    if (!token) {
+    if (!token || !deviceUid) {
       renderNextSchedule(documentRef, []);
       state.scheduleUid = null;
       return [];
@@ -711,6 +799,22 @@ export function createDashboardController({
       setHealth(documentRef.getElementById("systemHealth"), "unknown", "Sign In Required");
       setNotice(documentRef.getElementById("monitoringMessage"), "Authenticate to view device telemetry and alerts.");
       renderAlerts(documentRef.getElementById("alertLog"), []);
+      updateControlAvailability();
+      return null;
+    }
+    if (!deviceUid) {
+      state.online = false;
+      resetTelemetry(documentRef);
+      clearChart(chart);
+      setHealth(documentRef.getElementById("systemHealth"), "unknown", "Pair a Feeder");
+      setNotice(
+        documentRef.getElementById("monitoringMessage"),
+        "Your account is ready. Pair a physical feeder to begin monitoring and control.",
+        "warning"
+      );
+      renderAlerts(documentRef.getElementById("alertLog"), []);
+      renderCommands(documentRef.getElementById("commandHistory"), []);
+      renderNextSchedule(documentRef, []);
       updateControlAvailability();
       return null;
     }
@@ -760,16 +864,21 @@ export function createDashboardController({
         requestJson("/devices", { fetchImpl, token })
       ]);
       if (viewEpoch !== state.viewEpoch || token !== state.token) return false;
-      if (devices.length === 0) throw new Error("No devices are provisioned for this operator.");
+      state.userRole = user.role;
+      state.demo = user.role === "demo";
       state.deviceUid = populateDeviceSelect(documentRef.getElementById("deviceSelect"), devices, state.deviceUid);
       state.deviceId = devices.find((device) => device.device_uid === state.deviceUid)?.id ?? null;
-      state.demo = user.role === "demo";
-      setAuthenticated(true, user.username, user.role);
+      setAuthenticated(true, user.email || user.username, user.role);
+      setCustomerDeviceState(devices);
       setButlerState(
         documentRef,
         "ready",
-        state.demo ? "Demo concierge ready" : "Connected and standing by",
-        state.demo ? "Try a safe simulated feeding." : "Ready to care for your aquarium."
+        state.demo ? "Demo concierge ready" : devices.length > 0 ? "Connected and standing by" : "Account ready",
+        state.demo
+          ? "Try a safe simulated feeding."
+          : devices.length > 0
+            ? "Ready to care for your aquarium."
+            : "Pair your physical feeder to begin."
       );
       setNotice(documentRef.getElementById("loginMessage"), "", "normal");
       await refresh();
@@ -805,12 +914,150 @@ export function createDashboardController({
     }
   }
 
+  async function register(email, password, confirmation) {
+    setNotice(documentRef.getElementById("loginMessage"), "Creating your accountâ€¦");
+    try {
+      passwordsMatch(password, confirmation);
+      const response = await registerCustomer(email, password, { fetchImpl });
+      showAuthMode("signin");
+      setNotice(documentRef.getElementById("loginMessage"), response.message, "normal");
+      return true;
+    } catch (error) {
+      setNotice(documentRef.getElementById("loginMessage"), error.message, "critical");
+      return false;
+    }
+  }
+
+  async function requestPasswordReset(email) {
+    setNotice(documentRef.getElementById("loginMessage"), "Requesting a secure reset linkâ€¦");
+    try {
+      const response = await requestCustomerPasswordReset(email, { fetchImpl });
+      showAuthMode("signin");
+      setNotice(documentRef.getElementById("loginMessage"), response.message, "normal");
+      return true;
+    } catch (error) {
+      setNotice(documentRef.getElementById("loginMessage"), error.message, "critical");
+      return false;
+    }
+  }
+
+  async function confirmPasswordReset(token, password, confirmation) {
+    setNotice(documentRef.getElementById("loginMessage"), "Updating your passwordâ€¦");
+    try {
+      passwordsMatch(password, confirmation);
+      const response = await confirmCustomerPasswordReset(token, password, { fetchImpl });
+      showAuthMode("signin");
+      clearAccountQueryParameter("reset_token");
+      setNotice(documentRef.getElementById("loginMessage"), response.message, "normal");
+      return true;
+    } catch (error) {
+      setNotice(documentRef.getElementById("loginMessage"), error.message, "critical");
+      return false;
+    }
+  }
+
+  function clearAccountQueryParameter(parameter) {
+    const windowRef = documentRef.defaultView;
+    if (!windowRef?.location || !windowRef.history?.replaceState) return;
+    const url = new URL(windowRef.location.href);
+    url.searchParams.delete(parameter);
+    windowRef.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  async function processAccountActionLink() {
+    const windowRef = documentRef.defaultView;
+    if (!windowRef?.location) return false;
+    const url = new URL(windowRef.location.href);
+    const pairingDeviceUid = url.searchParams.get("device_uid");
+    const pairingCode = url.searchParams.get("pairing_code");
+    if (pairingDeviceUid && pairingCode) {
+      const pairingForm = documentRef.getElementById("devicePairingForm");
+      const deviceInput = pairingForm?.querySelector("[name='device_uid']");
+      const codeInput = pairingForm?.querySelector("[name='pairing_code']");
+      if (deviceInput) deviceInput.value = pairingDeviceUid;
+      if (codeInput) codeInput.value = pairingCode;
+      setNotice(
+        documentRef.getElementById("loginMessage"),
+        "Feeder code detected. Sign in or create an account to complete pairing.",
+        "normal"
+      );
+    }
+    const verificationToken = url.searchParams.get("verify_token");
+    if (verificationToken) {
+      setNotice(documentRef.getElementById("loginMessage"), "Verifying your emailâ€¦");
+      try {
+        const response = await verifyCustomerEmail(verificationToken, { fetchImpl });
+        clearAccountQueryParameter("verify_token");
+        showAuthMode("signin");
+        setNotice(documentRef.getElementById("loginMessage"), response.message, "normal");
+      } catch (error) {
+        setNotice(documentRef.getElementById("loginMessage"), error.message, "critical");
+      }
+    }
+    const resetToken = url.searchParams.get("reset_token");
+    if (!resetToken) return false;
+    const resetForm = documentRef.getElementById("passwordResetConfirmForm");
+    const tokenInput = resetForm?.querySelector("[name='token']");
+    if (tokenInput) tokenInput.value = resetToken;
+    showAuthMode("reset-confirm");
+    return true;
+  }
+
+  async function pairDevice(deviceUid, pairingCode) {
+    if (!state.token || state.userRole !== "customer") return false;
+    setNotice(documentRef.getElementById("pairingMessage"), "Pairing your feeder securelyâ€¦");
+    try {
+      await pairCustomerDevice(deviceUid, pairingCode, state.token, { fetchImpl });
+      invalidateView();
+      const loaded = await loadOperator();
+      if (loaded) {
+        clearAccountQueryParameter("device_uid");
+        clearAccountQueryParameter("pairing_code");
+        setNotice(documentRef.getElementById("pairingMessage"), "Feeder paired to your account.", "normal");
+      }
+      return loaded;
+    } catch (error) {
+      setNotice(documentRef.getElementById("pairingMessage"), error.message, "critical");
+      return false;
+    }
+  }
+
+  async function unpairSelectedDevice() {
+    if (!state.token || !state.deviceUid || state.userRole !== "customer") return false;
+    const windowRef = documentRef.defaultView;
+    if (!windowRef?.confirm?.(`Remove ${state.deviceUid} from this account? Live data and controls will disappear.`)) {
+      return false;
+    }
+    const removedUid = state.deviceUid;
+    setNotice(documentRef.getElementById("pairingMessage"), "Removing feederâ€¦");
+    try {
+      const response = await requestJson(`/devices/${encodeURIComponent(removedUid)}/pairing`, {
+        fetchImpl,
+        method: "DELETE",
+        token: state.token
+      });
+      invalidateView();
+      await loadOperator();
+      setNotice(
+        documentRef.getElementById("pairingMessage"),
+        `Feeder removed. New one-time pairing code: ${response.pairing_code}`,
+        "warning"
+      );
+      return true;
+    } catch (error) {
+      setNotice(documentRef.getElementById("pairingMessage"), error.message, "critical");
+      return false;
+    }
+  }
+
   function logout(message = "Signed out. Sign in to resume monitoring.") {
     invalidateView();
     stopFeedingAnimation();
     commandDialog?.dismiss();
     state.token = null;
     state.deviceId = null;
+    state.deviceUid = DEFAULT_DEVICE_UID;
+    state.userRole = null;
     state.online = false;
     state.demo = false;
     state.scheduleUid = null;
@@ -905,6 +1152,16 @@ export function createDashboardController({
   }
 
   function bindEvents() {
+    for (const button of documentRef.querySelectorAll("[data-auth-mode]")) {
+      button.addEventListener("click", () => {
+        showAuthMode(button.dataset.authMode);
+        setNotice(documentRef.getElementById("loginMessage"), "");
+      });
+    }
+    documentRef.getElementById("forgotPasswordButton")?.addEventListener("click", () => {
+      showAuthMode("reset");
+      setNotice(documentRef.getElementById("loginMessage"), "");
+    });
     documentRef.getElementById("aquariumPlayButton")?.addEventListener("click", async (event) => {
       const button = event.currentTarget;
       const video = documentRef.getElementById("aquariumVideo");
@@ -937,10 +1194,51 @@ export function createDashboardController({
         if (authenticated) formElement.reset();
       });
     });
+    documentRef.getElementById("registrationForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      register(
+        String(form.get("email") || ""),
+        String(form.get("password") || ""),
+        String(form.get("password_confirm") || "")
+      ).then((created) => {
+        if (created) formElement.reset();
+      });
+    });
+    documentRef.getElementById("passwordResetRequestForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      requestPasswordReset(String(form.get("email") || "")).then((requested) => {
+        if (requested) formElement.reset();
+      });
+    });
+    documentRef.getElementById("passwordResetConfirmForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      confirmPasswordReset(
+        String(form.get("token") || ""),
+        String(form.get("password") || ""),
+        String(form.get("password_confirm") || "")
+      ).then((changed) => {
+        if (changed) formElement.reset();
+      });
+    });
     documentRef.getElementById("logoutButton")?.addEventListener("click", () => logout());
     documentRef.getElementById("demoLoginButton")?.addEventListener("click", () => {
       login(DEMO_USERNAME, DEMO_PASSWORD);
     });
+    documentRef.getElementById("devicePairingForm")?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const formElement = event.currentTarget;
+      pairDevice(String(form.get("device_uid") || ""), String(form.get("pairing_code") || "")).then((paired) => {
+        if (paired) formElement.reset();
+      });
+    });
+    documentRef.getElementById("unpairDeviceButton")?.addEventListener("click", () => unpairSelectedDevice());
     documentRef.getElementById("deviceSelect")?.addEventListener("change", (event) => {
       invalidateView();
       stopFeedingAnimation();
@@ -980,11 +1278,27 @@ export function createDashboardController({
     bindEvents();
     setAuthenticated(false);
     updateControlAvailability();
+    const accountActionPending = await processAccountActionLink();
+    if (accountActionPending) return;
     if (state.token) await loadOperator();
     else await refresh();
   }
 
-  return { initialize, issueCommand, loadOperator, login, logout, refresh, refreshCommands, state };
+  return {
+    confirmPasswordReset,
+    initialize,
+    issueCommand,
+    loadOperator,
+    login,
+    logout,
+    pairDevice,
+    refresh,
+    refreshCommands,
+    register,
+    requestPasswordReset,
+    state,
+    unpairSelectedDevice
+  };
 }
 
 export function startDashboard(documentRef = document) {

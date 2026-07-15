@@ -25,6 +25,10 @@ All variables use the `FISH_FEEDER_` prefix:
 | `BOOTSTRAP_DEVICE_UID` | Initial device identity |
 | `CREDENTIAL_PEPPER` | Secret used for device-key digests |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Initial operator credentials |
+| `PUBLIC_APP_URL` | Public dashboard origin used in verification and reset links |
+| `EMAIL_DELIVERY_MODE` | `console` for local development or `smtp` for customer email |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` | Transactional email connection |
+| `SMTP_FROM_EMAIL`, `SMTP_STARTTLS` | Sender address and transport security |
 | `JWT_SECRET` / `JWT_EXPIRE_MINUTES` | Operator access tokens |
 | `CORS_ORIGINS` | Comma-separated allowed dashboard origins |
 | `OFFLINE_AFTER_SECONDS` | Heartbeat timeout |
@@ -47,6 +51,9 @@ All variables use the `FISH_FEEDER_` prefix:
 ## Security model
 
 - Operators authenticate with Argon2-hashed passwords and short-lived HS256 JWTs.
+- Customers register with an email address, verify a signed time-limited link, and can reset their password through a one-time signed link.
+- Customer API queries are scoped to devices whose `owner_user_id` matches the authenticated account.
+- A physical feeder is claimed using its UID and one-time pairing code. Provisioning returns the code once; pairing consumes it.
 - Devices use a UID and high-entropy API key. Only an HMAC-SHA256 digest is stored.
 - Device keys can be rotated through the authenticated operator API.
 - Login and telemetry ingestion use bounded in-process rate limits.

@@ -65,6 +65,15 @@ authenticated username as the topic segment, so `feeder-001` can access only
 `fish-feeder/feeder-001/*`. The bridge account is fixed as `bridge` by the
 included ACL.
 
+Customer registration also requires a transactional SMTP account. Configure
+`FISH_FEEDER_SMTP_HOST`, `FISH_FEEDER_SMTP_PORT`, `FISH_FEEDER_SMTP_USERNAME`,
+`FISH_FEEDER_SMTP_PASSWORD`, and `FISH_FEEDER_SMTP_FROM_EMAIL`. Keep
+`FISH_FEEDER_EMAIL_DELIVERY_MODE=smtp` in production. The backend builds
+verification and password-reset links from `https://DASHBOARD_DOMAIN`; it never
+returns those tokens through the public API. If SMTP is missing or unavailable,
+registration fails safely instead of creating an account that cannot be
+verified.
+
 For the first certificate test, you may temporarily set `ACME_CA_SERVER` to
 Let's Encrypt staging:
 

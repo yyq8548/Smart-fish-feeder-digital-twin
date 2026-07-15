@@ -73,3 +73,25 @@ test("reduced motion keeps critical content visible and disables parallax", asyn
   expect(presentation.videoTransform).toBe("none");
   expect(presentation.revealOpacity).toBe("1");
 });
+
+test("customer sign-up and recovery remain usable on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/#dashboard");
+  await page.getByRole("tab", { name: "Create account" }).click();
+  const registrationForm = page.locator("#registrationForm");
+  await expect(registrationForm.getByRole("button", { name: "Create account", exact: true })).toBeVisible();
+  await expect(registrationForm.getByLabel("Email", { exact: true })).toBeVisible();
+  await expect(registrationForm.getByLabel("Confirm password")).toBeVisible();
+
+  const signUpLayout = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    formWidth: document.getElementById("registrationForm").getBoundingClientRect().width
+  }));
+  expect(signUpLayout.scrollWidth).toBeLessThanOrEqual(signUpLayout.clientWidth);
+  expect(signUpLayout.formWidth).toBeLessThanOrEqual(signUpLayout.clientWidth);
+
+  await page.getByRole("tab", { name: "Sign in" }).click();
+  await page.getByRole("button", { name: "Forgot password?" }).click();
+  await expect(page.getByRole("button", { name: "Send reset link" })).toBeVisible();
+});

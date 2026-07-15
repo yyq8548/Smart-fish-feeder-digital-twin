@@ -904,6 +904,106 @@ button:focus-visible { outline: 3px solid rgba(99, 234, 215, 0.25); outline-offs
   }
 }
 
+/* Customer accounts and physical-device pairing */
+[hidden] { display: none !important; }
+
+.auth-mode-switch {
+  display: inline-flex;
+  width: fit-content;
+  padding: 3px;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.auth-mode-switch button {
+  min-height: 34px;
+  padding: 8px 13px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.auth-mode-switch button[aria-selected="true"] { color: #fff; background: var(--ink); }
+
+.auth-text-button {
+  min-height: 36px;
+  padding: 7px 4px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.auth-text-button:hover,
+.auth-text-button:focus-visible { color: var(--action); }
+
+.account-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: end;
+  padding: 18px;
+  border: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.account-form-heading { grid-column: 1 / -1; }
+.account-form-heading p { max-width: 650px; margin: 5px 0 7px; font-size: 11px; }
+.account-form-heading .label,
+.pairing-intro .label { color: var(--action); font-size: 9px; font-weight: 900; letter-spacing: 0.09em; text-transform: uppercase; }
+.password-guidance { grid-column: 1 / -1; margin: 0; font-size: 9px; }
+
+.customer-device-panel {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(420px, 1.3fr);
+  gap: 18px 28px;
+  padding: 20px;
+  border: 1px solid var(--ink);
+  background: #111;
+  color: #fff;
+}
+
+.pairing-intro { display: flex; align-items: flex-start; gap: 14px; }
+.pairing-intro p { margin: 5px 0 0; color: #aaa; font-size: 10px; line-height: 1.55; }
+.pairing-number { color: var(--healthy); font-size: 34px; font-weight: 900; letter-spacing: -0.06em; line-height: 1; }
+.pairing-form { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 10px; }
+.pairing-form label { display: grid; gap: 6px; color: #bbb; font-size: 9px; font-weight: 850; text-transform: uppercase; }
+.pairing-form input { border-color: #444; color: #fff; background: #181818; }
+.pairing-form input:focus { border-color: var(--healthy); background: #181818; box-shadow: 0 0 0 3px rgba(200, 255, 99, 0.15); }
+.pairing-form .button.primary { color: #101010; background: var(--healthy); }
+.customer-device-panel .danger-link { grid-column: 2; justify-self: start; color: #ff9d8e; }
+.customer-device-panel .notice { grid-column: 1 / -1; margin: 0; }
+
+body[data-account-role="customer"] .operator-session { flex-wrap: wrap; }
+body[data-account-role="customer"] .device-picker { flex: 1 1 280px; }
+
+@media (max-width: 860px) {
+  .account-form { grid-template-columns: 1fr; }
+  .account-form-heading,
+  .password-guidance { grid-column: 1; }
+  .customer-device-panel { grid-template-columns: 1fr; }
+  .pairing-form { grid-template-columns: 1fr 1fr; }
+  .pairing-form .button { grid-column: 1 / -1; }
+  .customer-device-panel .danger-link { grid-column: 1; }
+}
+
+@media (max-width: 560px) {
+  .auth-mode-switch { width: 100%; }
+  .auth-mode-switch button { flex: 1; }
+  .account-form { padding: 14px; }
+  .pairing-form { grid-template-columns: 1fr; }
+  .pairing-form .button { grid-column: 1; }
+  .customer-device-panel { padding: 17px; }
+}
+
 @media (max-width: 1100px) {
   .topbar { grid-template-columns: auto 1fr; }
   .quick-nav { grid-column: 1 / -1; grid-row: 2; justify-self: stretch; justify-content: center; order: 3; }

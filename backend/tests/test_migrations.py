@@ -28,6 +28,8 @@ def test_alembic_upgrade_creates_platform_schema(tmp_path: Path) -> None:
     } <= tables
     assert "expires_at" in {column["name"] for column in inspector.get_columns("device_commands")}
     assert "role" in {column["name"] for column in inspector.get_columns("users")}
+    assert {"email", "email_verified", "auth_version"} <= {column["name"] for column in inspector.get_columns("users")}
+    assert {"owner_user_id", "pairing_code_hash"} <= {column["name"] for column in inspector.get_columns("devices")}
 
 
 def test_alembic_upgrades_unversioned_v3_database(tmp_path: Path) -> None:
@@ -74,6 +76,8 @@ def test_alembic_upgrades_unversioned_v3_database(tmp_path: Path) -> None:
     assert telemetry_columns["temperature_c"]["nullable"] is True
     assert "expires_at" in {column["name"] for column in inspector.get_columns("device_commands")}
     assert "role" in {column["name"] for column in inspector.get_columns("users")}
+    assert {"email", "email_verified", "auth_version"} <= {column["name"] for column in inspector.get_columns("users")}
+    assert {"owner_user_id", "pairing_code_hash"} <= {column["name"] for column in inspector.get_columns("devices")}
     with engine.connect() as connection:
         assert connection.execute(text("SELECT sequence_number FROM telemetry WHERE id = 1")).scalar_one() == 1
         state = connection.execute(text("SELECT last_sequence_number, last_seen_at FROM devices WHERE id = 1")).one()

@@ -15,10 +15,14 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, index=True, nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    auth_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="operator", server_default="operator")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    devices: Mapped[list["Device"]] = relationship(back_populates="owner")
 
 
 class Device(Base):
@@ -28,10 +32,13 @@ class Device(Base):
     device_uid: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(120), default="Fish Feeder")
     api_key_hash: Mapped[str] = mapped_column(String(64))
+    pairing_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_sequence_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    owner: Mapped[User | None] = relationship(back_populates="devices")
     telemetry: Mapped[list["TelemetryRecord"]] = relationship(back_populates="device", cascade="all, delete-orphan")
     schedules: Mapped[list["FeedingSchedule"]] = relationship(back_populates="device", cascade="all, delete-orphan")
 
