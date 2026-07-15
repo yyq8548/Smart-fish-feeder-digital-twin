@@ -27,8 +27,14 @@ http://localhost:8080
 The dashboard uses:
 
 - `POST /auth/token`
+- `POST /auth/register`
+- `POST /auth/verify-email`
+- `POST /auth/password-reset/request`
+- `POST /auth/password-reset/confirm`
 - `GET /users/me`
 - `GET /devices`
+- `POST /devices/pair`
+- `DELETE /devices/{device_uid}/pairing`
 - `GET /device-status`
 - `GET /telemetry`
 - `GET /alerts`

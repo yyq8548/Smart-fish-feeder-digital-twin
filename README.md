@@ -32,10 +32,19 @@ Select **Try demo** on the sign-in panel for one-click access. The demo account 
 
 ## Website user manual
 
+### Customer sign-up and device pairing
+
+1. Select **Create account**, enter an email address, and choose a password with at least 12 characters, uppercase, lowercase, and a number.
+2. Open the time-limited verification link sent by the control board, then sign in with the verified email address.
+3. Scan the feeder QR code or enter the device UID and one-time pairing code supplied with the physical feeder.
+4. Confirm that the feeder appears under **Selected device**. Until a feeder is paired, the account stays empty and physical controls remain disabled.
+
+Each customer can see and control only devices paired to their account. Pairing consumes the code so it cannot be reused. **Remove selected feeder from this account** detaches the feeder and returns a replacement one-time code for a controlled transfer. The **Forgot password?** flow sends a single-use reset link without revealing whether an email address is registered.
+
 ### 1. Sign in
 
 1. Open [the live control board](https://feeder.smartfishfeeder.org).
-2. Select **Try demo** for the public simulator, or enter private operator credentials supplied by the system owner.
+2. Select **Try demo** for the public simulator, sign in with a verified customer email, or enter private operator credentials supplied by the system owner.
 3. Select **Sign in** when using manually entered credentials.
 4. Confirm that the header changes from **Sign In Required** to the current system state.
 
@@ -256,8 +265,8 @@ GitHub Actions runs the following on every pull request:
 
 - Ruff formatting and linting
 - Strict mypy type checking
-- 68 Python backend, MQTT transport, and Wokwi contract tests
-- 21 dashboard tests covering live, demo, empty, and failed API states
+- 71 Python backend, MQTT transport, account-isolation, and Wokwi contract tests
+- 29 dashboard tests covering live, demo, customer onboarding, empty, and failed API states
 - Browser-driven dashboard-to-Wokwi closed-loop verification
 - Python and JavaScript dependency vulnerability audits
 - Plaintext and verified-TLS ESP32 firmware compilation
@@ -265,14 +274,14 @@ GitHub Actions runs the following on every pull request:
 - Development and production Docker configuration validation
 - Complete Docker Compose build and end-to-end smoke test
 
-Current measured coverage is 91.15% for Python and 94.77% line coverage for the dashboard.
+Current measured coverage is 89.96% for Python and 85.18% line coverage for the dashboard.
 
 ## Main APIs
 
 | Area | Endpoints |
 | --- | --- |
-| Authentication | `POST /auth/token`, `GET /users/me` |
-| Devices | `POST/GET /devices`, `POST /devices/{uid}/rotate-key` |
+| Authentication | `POST /auth/register`, `POST /auth/verify-email`, `POST /auth/token`, password reset, `GET /users/me` |
+| Devices | `POST/GET /devices`, `POST /devices/pair`, pairing transfer, `POST /devices/{uid}/rotate-key` |
 | Telemetry | `POST/GET /telemetry`, `GET /device-status` |
 | Schedules | `POST/GET /devices/{uid}/schedules`, `PATCH/DELETE /schedules/{id}` |
 | Operations | `GET /feeding-executions`, `GET /alerts`, `POST /alerts/{id}/acknowledge` |

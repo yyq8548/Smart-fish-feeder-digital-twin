@@ -10,17 +10,22 @@ const {
   TOKEN_STORAGE_KEY,
   authenticateOperator,
   clearOperatorSession,
+  confirmCustomerPasswordReset,
   createCommandDialog,
   createDashboardController,
   formatTime,
   issueDeviceCommand,
   parseActuationDuration,
+  pairCustomerDevice,
+  passwordsMatch,
   populateDeviceSelect,
   refreshDashboard,
   renderAlerts,
   renderCommands,
   renderNextSchedule,
+  registerCustomer,
   requestJson,
+  requestCustomerPasswordReset,
   setHealth,
   startDashboard
 } = await import("./app.js");
@@ -40,10 +45,21 @@ function installDom() {
     <article id="scenePumpCard"><span id="scenePumpStatus"></span></article>
     <article id="sceneHeartbeatCard"><span id="sceneLastSeen"></span></article>
     <p id="monitoringMessage" hidden></p><ul id="alertLog"></ul><canvas id="tempChart"></canvas>
-    <form id="loginForm"><input name="username"><input name="password"><button type="submit">Login</button></form>
+    <div id="authModeSwitch"><button type="button" role="tab" data-auth-mode="signin">Sign in</button>
+      <button type="button" role="tab" data-auth-mode="signup">Create account</button></div>
+    <form id="loginForm"><input name="username"><input name="password"><button type="submit">Login</button>
+      <button id="forgotPasswordButton" type="button">Forgot password</button></form>
+    <form id="registrationForm" hidden><input name="email"><input name="password"><input name="password_confirm">
+      <button type="submit">Register</button></form>
+    <form id="passwordResetRequestForm" hidden><input name="email"><button type="submit">Reset</button></form>
+    <form id="passwordResetConfirmForm" hidden><input name="token"><input name="password">
+      <input name="password_confirm"><button type="submit">Confirm reset</button></form>
     <div id="demoAccess"><button id="demoLoginButton" type="button">Try demo</button></div>
-    <div id="operatorSession" hidden><span id="operatorUsername"></span><select id="deviceSelect"></select>
+    <div id="operatorSession" hidden><span id="operatorUsername"></span><label id="devicePicker"><select id="deviceSelect"></select></label>
       <button id="logoutButton" type="button">Logout</button></div>
+    <div id="customerDevicePanel" hidden><p id="pairingIntroText"></p>
+      <form id="devicePairingForm"><input name="device_uid"><input name="pairing_code"><button type="submit">Pair</button></form>
+      <button id="unpairDeviceButton" type="button" hidden>Unpair</button><p id="pairingMessage" hidden></p></div>
     <p id="demoModeBanner" hidden></p>
     <section class="aquarium-hero" data-playing="true">
       <aside id="conciergeShowcase" data-feeding="false">
@@ -141,6 +157,7 @@ describe("rendering helpers", () => {
     expect(select.selectedOptions[0].dataset.deviceId).toBe("2");
     expect(populateDeviceSelect(select, devices, "missing")).toBe("feeder-001");
     expect(populateDeviceSelect(null, devices, "feeder-009")).toBe("feeder-009");
+    expect(populateDeviceSelect(select, [], "feeder-009")).toBeNull();
   });
 
   it("accepts only whole-number actuation durations within the API range", () => {
@@ -216,6 +233,29 @@ describe("authenticated API client", () => {
     expect(request.body.toString()).toContain("username=alice");
     clearOperatorSession(sessionStorage);
     expect(sessionStorage.getItem(TOKEN_STORAGE_KEY)).toBeNull();
+  });
+
+  it("calls the customer registration, recovery, and pairing contracts", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response({ message: "Accepted" }, 202));
+    expect(passwordsMatch("SecureFeeder42", "SecureFeeder42")).toBe("SecureFeeder42");
+    expect(() => passwordsMatch("one", "two")).toThrow("Passwords do not match");
+
+    await registerCustomer("person@example.com", "SecureFeeder42", { fetchImpl });
+    await requestCustomerPasswordReset("person@example.com", { fetchImpl });
+    await confirmCustomerPasswordReset("reset-token", "NewSecureFeeder84", { fetchImpl });
+    await pairCustomerDevice("feeder-007", "PAIR-CODE", "customer-jwt", { fetchImpl });
+
+    expect(fetchImpl.mock.calls.map((call) => call[0])).toEqual([
+      expect.stringContaining("/auth/register"),
+      expect.stringContaining("/auth/password-reset/request"),
+      expect.stringContaining("/auth/password-reset/confirm"),
+      expect.stringContaining("/devices/pair")
+    ]);
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
+      email: "person@example.com",
+      password: "SecureFeeder42"
+    });
+    expect(fetchImpl.mock.calls[3][1].headers.Authorization).toBe("Bearer customer-jwt");
   });
 
   it("requires confirmation and posts a contract-compatible command", async () => {
@@ -414,6 +454,65 @@ describe("operator controller", () => {
     manager.complete();
     expect(document.getElementById("commandDialog").open).toBe(false);
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("supports an empty customer account, pairing, and secure unpairing", async () => {
+    let paired = false;
+    const customerDevice = { id: 7, device_uid: "customer-feeder", name: "Home feeder" };
+    const fetchImpl = vi.fn(async (url, options) => {
+      const method = options.method || "GET";
+      if (url.endsWith("/auth/token")) return response({ access_token: "customer-jwt" });
+      if (url.endsWith("/users/me")) {
+        return response({ username: "person@example.com", email: "person@example.com", role: "customer" });
+      }
+      if (url.endsWith("/devices") && method === "GET") return response(paired ? [customerDevice] : []);
+      if (url.endsWith("/devices/pair") && method === "POST") {
+        paired = true;
+        return response(customerDevice);
+      }
+      if (url.includes("/pairing") && method === "DELETE") {
+        paired = false;
+        return response({ ...customerDevice, pairing_code: "NEW-PAIR-CODE" });
+      }
+      if (url.includes("/device-status")) {
+        return response({
+          online: true,
+          temperature_c: 4.2,
+          cooling_on: false,
+          pump_state: "IDLE",
+          last_seen: "2026-01-01T12:00:00Z",
+          alert_level: "normal",
+          alert_message: null
+        });
+      }
+      if (url.includes("/telemetry") || url.includes("/alerts") || url.includes("/commands") || url.includes("/schedules")) {
+        return response([]);
+      }
+      throw new Error(`Unexpected request ${method} ${url}`);
+    });
+    const controller = createDashboardController({
+      documentRef: document,
+      fetchImpl,
+      storage: sessionStorage,
+      chartFactory: null
+    });
+
+    await controller.initialize();
+    expect(await controller.login("person@example.com", "SecureFeeder42")).toBe(true);
+    expect(controller.state.deviceUid).toBeNull();
+    expect(document.getElementById("customerDevicePanel").hidden).toBe(false);
+    expect(document.getElementById("devicePicker").hidden).toBe(true);
+    expect(document.getElementById("systemHealth").textContent).toBe("Pair a Feeder");
+
+    expect(await controller.pairDevice("customer-feeder", "PAIR-CODE")).toBe(true);
+    expect(controller.state.deviceUid).toBe("customer-feeder");
+    expect(document.getElementById("devicePicker").hidden).toBe(false);
+    expect(document.getElementById("unpairDeviceButton").hidden).toBe(false);
+
+    window.confirm = vi.fn().mockReturnValue(true);
+    expect(await controller.unpairSelectedDevice()).toBe(true);
+    expect(controller.state.deviceUid).toBeNull();
+    expect(document.getElementById("pairingMessage").textContent).toContain("NEW-PAIR-CODE");
   });
 
   it("keeps the command dialog open when the device rejects a command", async () => {

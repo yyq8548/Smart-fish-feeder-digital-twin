@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 def test_root_health_and_request_id(client: TestClient) -> None:
     root = client.get("/", headers={"X-Request-ID": "request-123"})
     assert root.status_code == 200
-    assert root.json()["version"] == "4.0.0"
+    assert root.json()["version"] == "5.0.0"
     assert root.json()["docs"] == "/docs"
     assert root.headers["X-Request-ID"] == "request-123"
     assert client.get("/health").json() == {"status": "healthy", "database": "connected"}

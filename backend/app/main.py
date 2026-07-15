@@ -8,12 +8,13 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import desc, or_, select, text, update
+from sqlalchemy import desc, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -27,20 +28,28 @@ from .demo_data import (
     demo_telemetry,
     list_demo_commands,
 )
+from .email_delivery import deliver_account_email
 from .logging_config import configure_logging
 from .models import Alert, Device, DeviceCommand, FeedingExecution, FeedingSchedule, TelemetryRecord, User
 from .rate_limit import rate_limiter
 from .schemas import (
+    AccountTokenRequest,
     AlertOut,
     CommandComplete,
     CommandCreate,
     CommandOut,
     DeviceCreate,
     DeviceOut,
+    DevicePairingResult,
+    DevicePairRequest,
     DeviceProvisioned,
     DeviceStatus,
     FeedingExecutionOut,
     HealthResponse,
+    MessageResponse,
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    RegistrationRequest,
     ReliabilityScanOut,
     ScheduleCreate,
     ScheduleOut,
@@ -52,9 +61,14 @@ from .schemas import (
 )
 from .security import (
     create_access_token,
+    create_account_action_token,
+    decode_account_action_token,
     get_current_user,
     hash_device_key,
+    hash_pairing_code,
     hash_password,
+    require_account_user,
+    require_customer,
     require_operator,
     verify_device_key,
     verify_password,
@@ -83,10 +97,12 @@ def seed_bootstrap_records(db: Session) -> None:
                 username=settings.admin_username,
                 password_hash=hash_password(settings.admin_password),
                 role="operator",
+                email_verified=True,
             )
         )
     else:
         user.role = "operator"
+        user.email_verified = True
     demo_users = list(db.scalars(select(User).where(User.role == "demo")))
     for existing_demo in demo_users:
         if not settings.demo_enabled or existing_demo.username != settings.demo_username:
@@ -99,11 +115,13 @@ def seed_bootstrap_records(db: Session) -> None:
                     username=settings.demo_username,
                     password_hash=hash_password(settings.demo_password),
                     role="demo",
+                    email_verified=True,
                 )
             )
         else:
             demo_user.role = "demo"
             demo_user.active = True
+            demo_user.email_verified = True
             if not verify_password(settings.demo_password, demo_user.password_hash):
                 demo_user.password_hash = hash_password(settings.demo_password)
     device = db.scalar(select(Device).where(Device.device_uid == settings.bootstrap_device_uid))
@@ -149,7 +167,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Smart Fish Feeder Digital Twin API",
-    version="4.0.0",
+    version="5.0.0",
     root_path=settings.root_path,
     lifespan=lifespan,
 )
@@ -199,6 +217,106 @@ def get_device_or_404(db: Session, device_uid: str) -> Device:
     return device
 
 
+def get_accessible_device_or_404(db: Session, device_uid: str, user: User) -> Device:
+    query = select(Device).where(Device.device_uid == device_uid)
+    if user.role == "customer":
+        query = query.where(Device.owner_user_id == user.id)
+    elif user.role != "operator":
+        raise HTTPException(status_code=404, detail="Device not found")
+    device = db.scalar(query)
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return device
+
+
+def scope_device_records(query, user: User):  # type: ignore[no-untyped-def]
+    if user.role == "customer":
+        return query.join(Device).where(Device.owner_user_id == user.id)
+    if user.role == "operator":
+        return query
+    raise HTTPException(status_code=403, detail="This account cannot access production resources")
+
+
+def get_accessible_schedule_or_404(db: Session, schedule_id: int, user: User) -> FeedingSchedule:
+    query = select(FeedingSchedule).join(Device).where(FeedingSchedule.id == schedule_id)
+    if user.role == "customer":
+        query = query.where(Device.owner_user_id == user.id)
+    schedule = db.scalar(query)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    return schedule
+
+
+def get_accessible_alert_or_404(db: Session, alert_id: int, user: User) -> Alert:
+    query = select(Alert).join(Device).where(Alert.id == alert_id)
+    if user.role == "customer":
+        query = query.where(Device.owner_user_id == user.id)
+    alert = db.scalar(query)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
+
+
+def new_pairing_code() -> str:
+    return secrets.token_urlsafe(12).upper()
+
+
+def pairing_url(device_uid: str, pairing_code: str) -> str:
+    return (
+        f"{settings.public_app_url.rstrip('/')}?device_uid={quote(device_uid)}"
+        f"&pairing_code={quote(pairing_code)}#dashboard"
+    )
+
+
+def account_user_from_token(db: Session, token: str, purpose: str) -> User:
+    try:
+        payload = decode_account_action_token(token, purpose)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    user_id = payload.get("uid")
+    username = payload.get("sub")
+    if not isinstance(user_id, int) or not isinstance(username, str):
+        raise HTTPException(status_code=400, detail="This account link is invalid or has expired")
+    user = db.get(User, user_id)
+    if user is None or user.username != username or not user.active:
+        raise HTTPException(status_code=400, detail="This account link is invalid or has expired")
+    email_fingerprint = hashlib.sha256((user.email or "").encode()).hexdigest()
+    if not secrets.compare_digest(str(payload.get("email", "")), email_fingerprint):
+        raise HTTPException(status_code=400, detail="This account link is no longer valid")
+    if purpose == "password-reset":
+        password_fingerprint = hashlib.sha256(user.password_hash.encode()).hexdigest()
+        if not secrets.compare_digest(str(payload.get("pwd", "")), password_fingerprint):
+            raise HTTPException(status_code=400, detail="This password reset link has already been used")
+    return user
+
+
+def send_verification_email(user: User) -> None:
+    if not user.email:
+        return
+    token = create_account_action_token(user, "verify-email", settings.email_verification_expire_minutes)
+    link = f"{settings.public_app_url.rstrip('/')}?verify_token={quote(token)}#dashboard"
+    deliver_account_email(
+        user.email,
+        "Verify your Smart Fish Feeder account",
+        f"Welcome to Smart Fish Feeder. Verify your email to activate your account:\n\n{link}\n\n"
+        "If you did not create this account, ignore this message.",
+    )
+
+
+def send_password_reset_email(user: User) -> None:
+    if not user.email:
+        return
+    token = create_account_action_token(user, "password-reset", settings.password_reset_expire_minutes)
+    link = f"{settings.public_app_url.rstrip('/')}?reset_token={quote(token)}#dashboard"
+    deliver_account_email(
+        user.email,
+        "Reset your Smart Fish Feeder password",
+        f"Use this link to choose a new password:\n\n{link}\n\n"
+        f"The link expires in {settings.password_reset_expire_minutes} minutes. "
+        "If you did not request it, ignore this message.",
+    )
+
+
 def device_is_online(device: Device, now: datetime | None = None) -> bool:
     last_seen = device.last_seen_at
     if last_seen is None:
@@ -230,7 +348,7 @@ def telemetry_payload_hash(payload: TelemetryIn) -> str:
 def root() -> dict[str, str]:
     return {
         "service": "Smart Fish Feeder Digital Twin API",
-        "version": "4.0.0",
+        "version": "5.0.0",
         "docs": f"{settings.root_path}/docs",
     }
 
@@ -241,6 +359,119 @@ def health(db: Session = Depends(get_db)) -> HealthResponse:
     return HealthResponse(status="healthy", database="connected")
 
 
+@app.post("/auth/register", response_model=MessageResponse, status_code=202)
+def register_customer(
+    request: Request,
+    payload: RegistrationRequest,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    client = request.client.host if request.client else "unknown"
+    rate_limit_or_429(f"register:{client}:{payload.email}", settings.registration_rate_limit_per_minute)
+    existing = db.scalar(select(User).where(or_(User.email == payload.email, User.username == payload.email)))
+    if existing is None:
+        user = User(
+            username=payload.email,
+            email=payload.email,
+            email_verified=False,
+            password_hash=hash_password(payload.password),
+            role="customer",
+            active=True,
+        )
+        db.add(user)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            return MessageResponse(message="Check your email for an account verification link.")
+        db.refresh(user)
+        try:
+            send_verification_email(user)
+        except Exception as exc:
+            logger.exception("verification_email_delivery_failed", extra={"user_id": user.id})
+            raise HTTPException(status_code=503, detail="Verification email could not be sent") from exc
+    elif existing.role == "customer" and not existing.email_verified and existing.active:
+        try:
+            send_verification_email(existing)
+        except Exception as exc:
+            logger.exception("verification_email_delivery_failed", extra={"user_id": existing.id})
+            raise HTTPException(status_code=503, detail="Verification email could not be sent") from exc
+    return MessageResponse(message="Check your email for an account verification link.")
+
+
+@app.post("/auth/verify-email", response_model=MessageResponse)
+def verify_customer_email(payload: AccountTokenRequest, db: Session = Depends(get_db)) -> MessageResponse:
+    user = account_user_from_token(db, payload.token, "verify-email")
+    if user.role != "customer":
+        raise HTTPException(status_code=400, detail="This verification link is not for a customer account")
+    user.email_verified = True
+    db.commit()
+    return MessageResponse(message="Email verified. You can now sign in and pair your feeder.")
+
+
+@app.post("/auth/verification/resend", response_model=MessageResponse, status_code=202)
+def resend_customer_verification(
+    request: Request,
+    payload: PasswordResetRequest,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    client = request.client.host if request.client else "unknown"
+    rate_limit_or_429(f"verify-resend:{client}:{payload.email}", settings.registration_rate_limit_per_minute)
+    user = db.scalar(
+        select(User).where(
+            User.email == payload.email,
+            User.role == "customer",
+            User.active.is_(True),
+            User.email_verified.is_(False),
+        )
+    )
+    if user is not None:
+        try:
+            send_verification_email(user)
+        except Exception as exc:
+            logger.exception("verification_email_delivery_failed", extra={"user_id": user.id})
+            raise HTTPException(status_code=503, detail="Verification email could not be sent") from exc
+    return MessageResponse(message="If the account needs verification, a new link has been sent.")
+
+
+@app.post("/auth/password-reset/request", response_model=MessageResponse, status_code=202)
+def request_customer_password_reset(
+    request: Request,
+    payload: PasswordResetRequest,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    client = request.client.host if request.client else "unknown"
+    rate_limit_or_429(f"password-reset:{client}:{payload.email}", settings.password_reset_rate_limit_per_minute)
+    user = db.scalar(
+        select(User).where(
+            User.email == payload.email,
+            User.role == "customer",
+            User.active.is_(True),
+            User.email_verified.is_(True),
+        )
+    )
+    if user is not None:
+        try:
+            send_password_reset_email(user)
+        except Exception as exc:
+            logger.exception("password_reset_email_delivery_failed", extra={"user_id": user.id})
+            raise HTTPException(status_code=503, detail="Password reset email could not be sent") from exc
+    return MessageResponse(message="If that account exists, a password reset link has been sent.")
+
+
+@app.post("/auth/password-reset/confirm", response_model=MessageResponse)
+def confirm_customer_password_reset(
+    payload: PasswordResetConfirm,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    user = account_user_from_token(db, payload.token, "password-reset")
+    if user.role != "customer" or not user.email_verified:
+        raise HTTPException(status_code=400, detail="This password reset link is not valid")
+    user.password_hash = hash_password(payload.password)
+    user.auth_version += 1
+    db.commit()
+    return MessageResponse(message="Password updated. Sign in with your new password.")
+
+
 @app.post("/auth/token", response_model=Token)
 def login(
     request: Request,
@@ -248,17 +479,25 @@ def login(
     db: Session = Depends(get_db),
 ) -> Token:
     client = request.client.host if request.client else "unknown"
-    is_demo_login = settings.demo_enabled and form.username == settings.demo_username
+    identifier = form.username.strip().lower()
+    is_demo_login = settings.demo_enabled and identifier == settings.demo_username.lower()
     login_limit = settings.demo_login_rate_limit_per_minute if is_demo_login else settings.login_rate_limit_per_minute
-    rate_limit_or_429(f"login:{client}:{form.username.lower()}", login_limit)
-    user = db.scalar(select(User).where(User.username == form.username, User.active.is_(True)))
+    rate_limit_or_429(f"login:{client}:{identifier}", login_limit)
+    user = db.scalar(
+        select(User).where(
+            or_(func.lower(User.username) == identifier, func.lower(User.email) == identifier),
+            User.active.is_(True),
+        )
+    )
     if user is None or not verify_password(form.password, user.password_hash):
         raise HTTPException(
             status_code=401,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return Token(access_token=create_access_token(user.username))
+    if user.role == "customer" and not user.email_verified:
+        raise HTTPException(status_code=403, detail="Verify your email before signing in")
+    return Token(access_token=create_access_token(user))
 
 
 @app.get("/users/me", response_model=UserOut)
@@ -275,22 +514,96 @@ def provision_device(
     if db.scalar(select(Device.id).where(Device.device_uid == payload.device_uid)) is not None:
         raise HTTPException(status_code=409, detail="Device UID already exists")
     api_key = secrets.token_urlsafe(32)
+    pairing_code = new_pairing_code()
     device = Device(
         device_uid=payload.device_uid,
         name=payload.name,
         api_key_hash=hash_device_key(api_key),
+        pairing_code_hash=hash_pairing_code(pairing_code),
     )
     db.add(device)
     db.commit()
     db.refresh(device)
-    return DeviceProvisioned(api_key=api_key, **DeviceOut.model_validate(device).model_dump())
+    return DeviceProvisioned(
+        api_key=api_key,
+        pairing_code=pairing_code,
+        pairing_url=pairing_url(device.device_uid, pairing_code),
+        **DeviceOut.model_validate(device).model_dump(),
+    )
 
 
 @app.get("/devices", response_model=list[DeviceOut])
 def list_devices(db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> list[DeviceOut]:
     if user.role == "demo":
         return [demo_device(settings.demo_device_uid)]
-    return [DeviceOut.model_validate(device) for device in db.scalars(select(Device).order_by(Device.device_uid))]
+    query = select(Device).order_by(Device.device_uid)
+    if user.role == "customer":
+        query = query.where(Device.owner_user_id == user.id)
+    elif user.role != "operator":
+        raise HTTPException(status_code=403, detail="This account cannot access production resources")
+    return [DeviceOut.model_validate(device) for device in db.scalars(query)]
+
+
+@app.post("/devices/pair", response_model=DevicePairingResult)
+def pair_device(
+    request: Request,
+    payload: DevicePairRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_customer),
+) -> DevicePairingResult:
+    client = request.client.host if request.client else "unknown"
+    rate_limit_or_429(f"pair:{client}:{user.id}", settings.pairing_rate_limit_per_minute)
+    device = db.scalar(select(Device).where(Device.device_uid == payload.device_uid, Device.active.is_(True)))
+    if (
+        device is None
+        or device.pairing_code_hash is None
+        or not secrets.compare_digest(hash_pairing_code(payload.pairing_code), device.pairing_code_hash)
+    ):
+        raise HTTPException(status_code=404, detail="Device UID or pairing code is invalid")
+    if device.owner_user_id is not None and device.owner_user_id != user.id:
+        raise HTTPException(status_code=409, detail="This feeder is already paired to another account")
+    device.owner_user_id = user.id
+    device.pairing_code_hash = None
+    db.commit()
+    db.refresh(device)
+    return DevicePairingResult.model_validate(device)
+
+
+@app.post("/devices/{device_uid}/pairing-code", response_model=DevicePairingResult)
+def rotate_pairing_code(
+    device_uid: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_operator),
+) -> DevicePairingResult:
+    device = get_device_or_404(db, device_uid)
+    pairing_code = new_pairing_code()
+    device.pairing_code_hash = hash_pairing_code(pairing_code)
+    db.commit()
+    db.refresh(device)
+    return DevicePairingResult(
+        pairing_code=pairing_code,
+        pairing_url=pairing_url(device.device_uid, pairing_code),
+        **DeviceOut.model_validate(device).model_dump(),
+    )
+
+
+@app.delete("/devices/{device_uid}/pairing", response_model=DevicePairingResult)
+def unpair_device(
+    device_uid: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> DevicePairingResult:
+    device = get_accessible_device_or_404(db, device_uid, user)
+    pairing_code = new_pairing_code()
+    device.owner_user_id = None
+    device.pairing_code_hash = hash_pairing_code(pairing_code)
+    db.commit()
+    db.refresh(device)
+    return DevicePairingResult(
+        pairing_code=pairing_code,
+        pairing_url=pairing_url(device.device_uid, pairing_code),
+        **DeviceOut.model_validate(device).model_dump(),
+    )
 
 
 @app.post("/devices/{device_uid}/rotate-key", response_model=DeviceProvisioned)
@@ -494,8 +807,10 @@ def list_telemetry(
         return demo_telemetry()[-limit:]
     query = select(TelemetryRecord).order_by(desc(TelemetryRecord.created_at)).limit(limit)
     if device_uid:
-        device = get_device_or_404(db, device_uid)
+        device = get_accessible_device_or_404(db, device_uid, user)
         query = query.where(TelemetryRecord.device_id == device.id)
+    else:
+        query = scope_device_records(query, user)
     records = list(db.scalars(query))
     return [TelemetryOut.model_validate(record) for record in reversed(records)]
 
@@ -510,7 +825,13 @@ def get_device_status(
         if device_uid != settings.demo_device_uid:
             raise HTTPException(status_code=404, detail="Demo device not found")
         return demo_status(settings.demo_device_uid)
-    device = db.scalar(select(Device).where(Device.device_uid == device_uid))
+    device: Device | None
+    if user.role == "customer":
+        device = get_accessible_device_or_404(db, device_uid, user)
+    elif user.role == "operator":
+        device = db.scalar(select(Device).where(Device.device_uid == device_uid))
+    else:
+        raise HTTPException(status_code=403, detail="This account cannot access production resources")
     latest = (
         None
         if device is None
@@ -555,9 +876,9 @@ def create_schedule(
     device_uid: str,
     payload: ScheduleCreate,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_operator),
+    user: User = Depends(require_account_user),
 ) -> FeedingSchedule:
-    device = get_device_or_404(db, device_uid)
+    device = get_accessible_device_or_404(db, device_uid, user)
     try:
         ZoneInfo(payload.timezone)
     except ZoneInfoNotFoundError as exc:
@@ -588,7 +909,7 @@ def list_schedules(
         if device_uid != settings.demo_device_uid:
             raise HTTPException(status_code=404, detail="Demo device not found")
         return []
-    device = get_device_or_404(db, device_uid)
+    device = get_accessible_device_or_404(db, device_uid, user)
     return [
         ScheduleOut.model_validate(schedule)
         for schedule in db.scalars(select(FeedingSchedule).where(FeedingSchedule.device_id == device.id))
@@ -600,11 +921,9 @@ def update_schedule(
     schedule_id: int,
     payload: ScheduleUpdate,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_operator),
+    user: User = Depends(require_account_user),
 ) -> FeedingSchedule:
-    schedule = db.get(FeedingSchedule, schedule_id)
-    if schedule is None:
-        raise HTTPException(status_code=404, detail="Schedule not found")
+    schedule = get_accessible_schedule_or_404(db, schedule_id, user)
     updates = payload.model_dump(exclude_unset=True)
     if "days_of_week" in updates:
         days = updates.pop("days_of_week")
@@ -632,11 +951,9 @@ def update_schedule(
 def delete_schedule(
     schedule_id: int,
     db: Session = Depends(get_db),
-    _user: User = Depends(require_operator),
+    user: User = Depends(require_account_user),
 ) -> Response:
-    schedule = db.get(FeedingSchedule, schedule_id)
-    if schedule is None:
-        raise HTTPException(status_code=404, detail="Schedule not found")
+    schedule = get_accessible_schedule_or_404(db, schedule_id, user)
     if db.scalar(select(FeedingExecution.id).where(FeedingExecution.schedule_id == schedule_id)) is not None:
         raise HTTPException(
             status_code=409, detail="Schedule with execution history cannot be deleted; disable it instead"
@@ -659,8 +976,10 @@ def list_feeding_executions(
         return []
     query = select(FeedingExecution).order_by(desc(FeedingExecution.created_at)).limit(limit)
     if device_uid:
-        device = get_device_or_404(db, device_uid)
+        device = get_accessible_device_or_404(db, device_uid, user)
         query = query.where(FeedingExecution.device_id == device.id)
+    else:
+        query = scope_device_records(query, user)
     return [FeedingExecutionOut.model_validate(execution) for execution in db.scalars(query)]
 
 
@@ -681,8 +1000,10 @@ def list_alerts(
     if unacknowledged_only:
         query = query.where(Alert.acknowledged_at.is_(None))
     if device_uid:
-        device = get_device_or_404(db, device_uid)
+        device = get_accessible_device_or_404(db, device_uid, user)
         query = query.where(Alert.device_id == device.id)
+    else:
+        query = scope_device_records(query, user)
     return [AlertOut.model_validate(alert) for alert in db.scalars(query)]
 
 
@@ -690,11 +1011,9 @@ def list_alerts(
 def acknowledge_alert(
     alert_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_operator),
+    user: User = Depends(require_account_user),
 ) -> Alert:
-    alert = db.get(Alert, alert_id)
-    if alert is None:
-        raise HTTPException(status_code=404, detail="Alert not found")
+    alert = get_accessible_alert_or_404(db, alert_id, user)
     if alert.acknowledged_at is None:
         alert.acknowledged_at = datetime.now(UTC)
         alert.acknowledged_by_user_id = user.id
@@ -714,7 +1033,7 @@ def create_command(
         if device_uid != settings.demo_device_uid:
             raise HTTPException(status_code=404, detail="Demo device not found")
         return create_demo_command(payload, settings.manual_command_ttl_seconds)
-    device = get_device_or_404(db, device_uid)
+    device = get_accessible_device_or_404(db, device_uid, user)
     now = datetime.now(UTC)
     actuation_commands = {"FEED_NOW", "CLEAN_PUMP", "SET_COOLING"}
     if (
@@ -773,7 +1092,7 @@ def list_commands(
         if device_uid != settings.demo_device_uid:
             raise HTTPException(status_code=404, detail="Demo device not found")
         return list_demo_commands(limit)
-    device = get_device_or_404(db, device_uid)
+    device = get_accessible_device_or_404(db, device_uid, user)
     return [
         CommandOut.model_validate(command)
         for command in db.scalars(

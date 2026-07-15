@@ -226,7 +226,7 @@ def scan_reliability(db: Session, now: datetime, offline_after_seconds: int) -> 
     missed_created = 0
     offline_created = 0
     commands_created = 0
-    operator = db.scalar(select(User).where(User.active.is_(True)).order_by(User.id))
+    operator = db.scalar(select(User).where(User.role == "operator", User.active.is_(True)).order_by(User.id))
 
     for device in db.scalars(select(Device).where(Device.active.is_(True))):
         last_seen = device.last_seen_at
@@ -271,9 +271,15 @@ def scan_reliability(db: Session, now: datetime, offline_after_seconds: int) -> 
         if execution is not None:
             continue
         operation_key = f"scheduled-feed:{schedule.id}:{local_now.date().isoformat()}"
+        device_owner = db.scalar(
+            select(User)
+            .join(Device, Device.owner_user_id == User.id)
+            .where(Device.id == schedule.device_id, User.active.is_(True))
+        )
+        requester = device_owner or operator
         if local_now <= expected_local + timedelta(minutes=schedule.grace_minutes):
             if (
-                operator is not None
+                requester is not None
                 and db.scalar(
                     select(DeviceCommand.id).where(
                         DeviceCommand.device_id == schedule.device_id,
@@ -288,7 +294,7 @@ def scan_reliability(db: Session, now: datetime, offline_after_seconds: int) -> 
                         idempotency_key=operation_key,
                         command_type="FEED_NOW",
                         payload_json=json.dumps({"schedule_id": schedule.id}, separators=(",", ":"), sort_keys=True),
-                        requested_by_user_id=operator.id,
+                        requested_by_user_id=requester.id,
                         expires_at=(expected_local + timedelta(minutes=schedule.grace_minutes)).astimezone(UTC),
                     )
                 )

@@ -18,6 +18,7 @@ def demo_device(device_uid: str, now: datetime | None = None) -> DeviceOut:
         id=DEMO_DEVICE_ID,
         device_uid=device_uid,
         name="Public Demo Feeder",
+        owner_user_id=None,
         active=True,
         last_sequence_number=12,
         last_seen_at=current,

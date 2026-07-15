@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PumpState = Literal["IDLE", "FEEDING", "CLEANING", "ERROR"]
 SensorStatus = Literal["OK", "ERROR", "DISCONNECTED"]
@@ -18,8 +18,67 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     username: str
-    role: Literal["operator", "demo"]
+    email: str | None
+    email_verified: bool
+    role: Literal["operator", "customer", "demo"]
     active: bool
+
+
+def normalize_email(value: str) -> str:
+    email = value.strip().lower()
+    if len(email) > 254 or email.count("@") != 1:
+        raise ValueError("Enter a valid email address")
+    local, domain = email.split("@", 1)
+    if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        raise ValueError("Enter a valid email address")
+    return email
+
+
+class RegistrationRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        if not any(character.islower() for character in value):
+            raise ValueError("Password must include a lowercase letter")
+        if not any(character.isupper() for character in value):
+            raise ValueError("Password must include an uppercase letter")
+        if not any(character.isdigit() for character in value):
+            raise ValueError("Password must include a number")
+        return value
+
+
+class AccountTokenRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=4_096)
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return normalize_email(value)
+
+
+class PasswordResetConfirm(AccountTokenRequest):
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return RegistrationRequest.validate_password(value)
+
+
+class MessageResponse(BaseModel):
+    message: str
 
 
 class DeviceCreate(BaseModel):
@@ -27,11 +86,17 @@ class DeviceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
+class DevicePairRequest(BaseModel):
+    device_uid: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+    pairing_code: str = Field(min_length=8, max_length=64)
+
+
 class DeviceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     device_uid: str
     name: str
+    owner_user_id: int | None
     active: bool
     last_sequence_number: int | None
     last_seen_at: datetime | None
@@ -40,6 +105,13 @@ class DeviceOut(BaseModel):
 
 class DeviceProvisioned(DeviceOut):
     api_key: str
+    pairing_code: str | None = None
+    pairing_url: str | None = None
+
+
+class DevicePairingResult(DeviceOut):
+    pairing_code: str | None = None
+    pairing_url: str | None = None
 
 
 class TelemetryIn(BaseModel):
