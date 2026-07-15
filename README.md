@@ -1,22 +1,30 @@
-# Smart Fish Feeder Cloud Control Board
+# Smart Fish Feeder
+
+> A secure cloud control board for a physical ESP32 liquid-food feeder
 
 [![CI](https://github.com/yyq8548/Smart-fish-feeder-digital-control/actions/workflows/ci.yml/badge.svg)](https://github.com/yyq8548/Smart-fish-feeder-digital-control/actions/workflows/ci.yml)
-![Backend coverage](https://img.shields.io/badge/backend%20coverage-92%25-brightgreen)
-![Frontend line coverage](https://img.shields.io/badge/frontend%20line%20coverage-95%25-brightgreen)
+![Backend coverage](https://img.shields.io/badge/backend%20coverage-90%25-brightgreen)
+![Frontend line coverage](https://img.shields.io/badge/frontend%20line%20coverage-85%25-brightgreen)
 ![ESP32](https://img.shields.io/badge/device-ESP32-blue)
 ![MQTT TLS](https://img.shields.io/badge/MQTT-TLS%201.2%2B-success)
 
-**Keep your fish well-fed with fresh liquid food, even when you’re away.**
+**Feed smarter. Worry less.**
 
-Whether you’re going on vacation, need multiple scheduled feedings each day, or have fish that prefer liquid food over pellets, the Smart Liquid Fish Feeder makes care easier. It keeps liquid food fresh below 40°F, dispenses meals on your schedule, and automatically reverses the pump after feeding to help clean the line and prevent leftover food from spoiling inside the tube. Feed smarter, reduce waste, and give your fish consistent care anytime.
+This project solves a practical problem for aquarium hobbyists who need to keep liquid food cool, deliver consistent meals while away, and prevent food from remaining in the pump line. A physical ESP32 feeder reports live telemetry to the cloud, accepts authenticated commands, dispenses food, reverses the pump to clean the tube, and reports the final result back to the website.
 
-This is the online control board for the smart fish feeder. It combines a responsive dashboard, FastAPI backend, persistent database, authenticated MQTT broker, ESP32 firmware, automated testing, and a production Docker deployment.
+The repository contains the complete system: responsive web dashboard, FastAPI control service, persistent database, authenticated MQTT/TLS broker, ESP32 firmware, automated tests, and a Docker-based production deployment.
 
-## Live website
+| Monitor | Automate | Control | Verify |
+| --- | --- | --- | --- |
+| Reservoir temperature, pump state, cooling output, heartbeat | Timezone-aware recurring feeding schedules | Feed now, clean pump, automatic or forced cooling | Signed device results, command history, alerts, and audit records |
 
-**Control board:** [https://feeder.smartfishfeeder.org](https://feeder.smartfishfeeder.org)
+**Quick links:** [Live dashboard](https://feeder.smartfishfeeder.org) · [Physical demo](https://youtu.be/YY09H4AA6kg) · [User manual](#website-user-manual) · [Command flow](#how-a-command-reaches-the-feeder) · [Production deployment](#production-deployment)
 
-**Physical Device Demo:**
+## Live system
+
+**Control board:** [feeder.smartfishfeeder.org](https://feeder.smartfishfeeder.org)
+
+**Physical device video:**
 
 [![Watch the physical smart fish feeder demo](https://img.youtube.com/vi/YY09H4AA6kg/maxresdefault.jpg)](https://youtu.be/YY09H4AA6kg)
 
@@ -28,6 +36,32 @@ password: smartfishdemo
 ```
 
 Select **Try demo** on the sign-in panel for one-click access. The demo account cannot view production devices or telemetry, provision hardware, rotate credentials, modify schedules, acknowledge production alerts, run reliability jobs, or send commands to the physical ESP32. Production usernames, passwords, device credentials, and signing secrets remain private.
+
+## Product tour
+
+### Cloud control for the physical feeder
+
+[![Smart Fish Feeder landing screen and live aquarium control surface](docs/images/dashboard-landing.png)](https://feeder.smartfishfeeder.org)
+
+The landing experience connects the aquarium scene to the operational dashboard while keeping sign-in state, device health, and the next feeding visible.
+
+### Live telemetry and temperature history
+
+![Feeder status cards and reservoir temperature history](docs/images/dashboard-telemetry.png)
+
+The control board refreshes device telemetry every two seconds and presents reservoir temperature, cooling output, pump state, last heartbeat, and ordered temperature history at a glance.
+
+### Recurring feeding schedules
+
+![Timezone-aware recurring feeding schedule editor](docs/images/dashboard-schedule.png)
+
+Authenticated customers can create recurring schedules for selected weekdays, choose the feeder's timezone and grace period, and pause or delete saved schedules. The public demo presents this workflow in read-only mode.
+
+### Device controls, results, and alerts
+
+![Physical device commands, completed results, and recent alerts](docs/images/dashboard-controls.png)
+
+Manual commands require confirmation. Every request receives a durable lifecycle record, and the dashboard separates pending work from signed completion results returned by the ESP32.
 
 
 ## Website user manual
@@ -69,7 +103,18 @@ Review the four status cards before operating the feeder:
 
 The **Temperature History** chart shows recent ordered telemetry. An offline banner or stale **Last Seen** value means actuator controls will remain disabled.
 
-### 4. Feed now
+### 4. Create a feeding schedule
+
+1. Select **Schedule** in the top navigation.
+2. Enter a descriptive schedule name and feeding time.
+3. Confirm the IANA timezone, such as `America/New_York`.
+4. Choose the weekdays on which the schedule should run.
+5. Set a grace period between `1` and `180` minutes.
+6. Keep **Start this schedule immediately** selected, then choose **Add schedule**.
+
+Saved schedules can be paused, re-enabled, or deleted without changing other feeder settings. Schedules belong to the selected physical feeder, so verify the device before saving. The public demo is intentionally read-only and does not create persistent schedules.
+
+### 5. Feed now
 
 1. Confirm that the selected device is online and its pump state is `IDLE`.
 2. Enter a feed duration between `500` and `60,000` milliseconds.
@@ -79,7 +124,7 @@ The **Temperature History** chart shows recent ordered telemetry. An offline ban
 
 The ESP32 runs the pump forward to dispense food, pauses for safety, reverses the pump to clean the tube, and then returns to idle.
 
-### 5. Clean the pump
+### 6. Clean the pump
 
 1. Confirm that the mechanism can operate safely.
 2. Enter a cleaning duration between `500` and `60,000` milliseconds.
@@ -88,7 +133,7 @@ The ESP32 runs the pump forward to dispense food, pauses for safety, reverses th
 
 The cleaning command operates the pump in reverse without running a complete feeding cycle.
 
-### 6. Change cooling mode
+### 7. Change cooling mode
 
 Choose one of the following controls and confirm the request:
 
@@ -100,7 +145,7 @@ Choose one of the following controls and confirm the request:
 
 Use forced modes only for supervised operation. Return the device to **Automatic** for normal unattended temperature control.
 
-### 7. Read command history
+### 8. Read command history
 
 Every accepted request is recorded with its command type, creation time, expiration time, status, and device result.
 
@@ -114,11 +159,11 @@ Every accepted request is recorded with its command type, creation time, expirat
 
 Do not assume that an accepted command completed. Wait for `COMPLETED` and read the result text.
 
-### 8. Review alerts
+### 9. Review alerts
 
 The **Recent alerts** panel displays temperature, sensor, pump, offline, and missed-feeding incidents. Check the timestamp, severity, category, and message before taking action. Resolve the physical cause before repeating a failed command.
 
-### 9. Sign out
+### 10. Sign out
 
 Select **Sign out** when finished, especially on a shared computer. Closing the browser tab also removes the in-tab session token.
 
@@ -126,13 +171,14 @@ Select **Sign out** when finished, especially on a shared computer. Closing the 
 
 | Dashboard action | Cloud command | ESP32 behavior | Expected result |
 | --- | --- | --- | --- |
+| Scheduled feeding | Due schedule execution | Signed feed command at the configured local time | Recorded execution and terminal result |
 | Feed now | `FEED_NOW` | Pump forward, safety pause, reverse clean, idle | Completed or failed feeding cycle |
 | Clean pump | `CLEAN_PUMP` | Pump reverse for the requested duration | Completed or failed cleaning cycle |
 | Automatic cooling | `SET_COOLING: AUTO` | Temperature-controlled cooling | Automatic mode enabled |
 | Force cooling on | `SET_COOLING: FORCED_ON` | Cooling driver enabled | Output enabled |
 | Force cooling off | `SET_COOLING: FORCED_OFF` | Cooling driver disabled | Output disabled |
 
-The backend also supports timezone-aware feeding schedules, missed-feeding detection, alert acknowledgement, credential rotation, and device provisioning through its authenticated API.
+The backend also supports missed-feeding detection, alert acknowledgement, credential rotation, and device provisioning through its authenticated API.
 
 ### What the public demo includes
 
@@ -143,6 +189,7 @@ The backend also supports timezone-aware feeding schedules, missed-feeding detec
 | Sample alert | A resolved warning showing how a 5.6 &deg;C temperature excursion appears |
 | Command history | Completed automatic-cooling, pump-cleaning, and feeding examples |
 | Interactive controls | Submit feed, clean, and cooling commands and immediately see a simulated `COMPLETED` result |
+| Schedule preview | View the complete scheduling interface without creating persistent production schedules |
 
 The public demo is deliberately separated from the physical control path. Its commands are held only in server memory, never written to the production command database, and never published to the MQTT broker. Demo sessions cannot discover real device identifiers or data: production-device reads return `404`, and production mutations return `403`. Synthetic data is regenerated and interactive demo history resets whenever the backend restarts.
 
@@ -155,11 +202,7 @@ The public demo is deliberately separated from the physical control path. Its co
 | Backend API | `https://feeder.smartfishfeeder.org/api` | Authenticated application API |
 | ESP32 broker | `mqtt.smartfishfeeder.org:8883` | Authenticated MQTT over TLS |
 
-![Authenticated control board showing the selected feeder](docs/images/control-board-overview.png)
-
-The dashboard shows the selected feeder's temperature, cooling output, pump state, last accepted event, recent telemetry, alerts, and command history.
-
-![Physical controls and completed command history](docs/images/control-board-demo.png)## Connect a physical ESP32
+## Connect a physical ESP32
 
 The ESP32 connects directly to the production broker over Wi-Fi; it does not need to remain connected to a computer after flashing.
 
@@ -266,7 +309,7 @@ GitHub Actions runs the following on every pull request:
 - Ruff formatting and linting
 - Strict mypy type checking
 - 71 Python backend, MQTT transport, account-isolation, and Wokwi contract tests
-- 29 dashboard tests covering live, demo, customer onboarding, empty, and failed API states
+- 32 dashboard tests covering live, demo, customer onboarding, schedule management, empty, and failed API states
 - Browser-driven dashboard-to-Wokwi closed-loop verification
 - Python and JavaScript dependency vulnerability audits
 - Plaintext and verified-TLS ESP32 firmware compilation
@@ -274,7 +317,7 @@ GitHub Actions runs the following on every pull request:
 - Development and production Docker configuration validation
 - Complete Docker Compose build and end-to-end smoke test
 
-Current measured coverage is 89.96% for Python and 85.18% line coverage for the dashboard.
+The latest successful CI run measured 89.84% Python coverage and 84.75% dashboard line coverage.
 
 ## Main APIs
 
