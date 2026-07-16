@@ -1,0 +1,16 @@
+[Unit]
+Description=Smart Fish Feeder production health monitor
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/smart-fish-feeder
+Environment=HOME=/var/lib/smart-fish-feeder-monitor
+ExecStart=/usr/bin/python3 /opt/smart-fish-feeder/scripts/production_monitor.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/smart-fish-feeder-monitor

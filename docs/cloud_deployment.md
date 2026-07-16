@@ -213,7 +213,9 @@ docker compose --env-file .env.production -f docker-compose.production.yml \
 
 An atomic volume/storage snapshot can replace the downtime if the VPS provider
 guarantees consistency across all four volumes. Test a restore on a separate
-VPS; an untested backup is not a recovery plan.
+VPS; an untested backup is not a recovery plan. The repository's isolated
+[SQLite restore drill](backup_restore_drill.md) validates a copied database
+without opening the production file.
 
 Changing `FISH_FEEDER_DEVICE_API_KEY` in the environment does not rotate the key
 for an existing database record. Use the authenticated key-rotation API and
@@ -228,10 +230,9 @@ docker compose --env-file .env.production \
   -f docker-compose.production.yml up -d --force-recreate mqtt mqtt-bridge
 ```
 
-Likewise, changing `FISH_FEEDER_ADMIN_PASSWORD` does not update an existing
-operator row: bootstrap credentials are applied only when that user is first
-created. Add an authenticated password-change workflow or perform a controlled
-password-hash migration before relying on an environment change. Changing the
+Changing `FISH_FEEDER_ADMIN_PASSWORD` updates the bootstrap operator hash on the
+next backend start and revokes its existing sessions. Treat it as an immediate
+credential rotation and save the new value before restarting. Changing the
 credential pepper invalidates existing device-key hashes and requires a planned
 rotation of every device credential.
 
@@ -253,6 +254,10 @@ persistence, container logs, and certificates all share one machine. The
 Compose profile uses Docker's rotating `local` log driver (10 MB × 5 files per
 service); preserve an equivalent bounded policy if the logging driver changes.
 
+Install the [production monitoring timer](production_monitoring.md) after each
+checkout update. It checks the website, API, MQTT TLS, Resend, Compose health,
+recent 5xx/database-lock/email failures, and customer-owned offline devices.
+
 ## Security boundaries and limitations
 
 - This is a single-node deployment. The VPS, its disk, and its network are
@@ -273,10 +278,10 @@ service); preserve an equivalent bounded policy if the logging driver changes.
   administrators.
 - The telemetry chart is rendered by a small repository-owned canvas module, so
   the authenticated console does not execute scripts from a third-party CDN.
-- The included broker initialization and ACL cover one physical device. For
-  multiple devices, create one broker user per device UID, extend the password
-  initialization, and provide matching `DEVICE_CREDENTIALS_JSON` and
-  `MQTT_SHARED_SECRETS_JSON` maps.
+- The broker ACL supports any device-scoped username. Register additional
+  `device_uid:password` pairs with `MQTT_DEVICE_CREDENTIALS` and provide the
+  corresponding per-device HTTP/HMAC credentials through the bridge's credential
+  maps before connecting more physical units.
 - Mosquitto 2.1 retains `password_file` and `acl_file` for compatibility but
   deprecates them. Migrate this profile to Mosquitto's password-file and ACL-file
   plugins before a future 3.0 image upgrade removes the legacy directives.

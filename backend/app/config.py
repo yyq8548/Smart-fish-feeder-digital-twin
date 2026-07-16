@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     pairing_rate_limit_per_minute: int = Field(default=10, ge=1)
     device_claim_expire_hours: int = Field(default=8_760, ge=1, le=17_520)
     device_transfer_expire_hours: int = Field(default=24, ge=1, le=168)
+    sqlite_busy_timeout_ms: int = Field(default=10_000, ge=1_000, le=60_000)
+    sqlite_lock_retry_attempts: int = Field(default=3, ge=1, le=10)
+    sqlite_lock_retry_base_delay_ms: int = Field(default=50, ge=10, le=1_000)
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="FISH_FEEDER_")
 

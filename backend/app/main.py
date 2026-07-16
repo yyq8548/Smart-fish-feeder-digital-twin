@@ -8,6 +8,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -19,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import get_settings
-from .database import Base, SessionLocal, engine, get_db
+from .database import Base, SessionLocal, SqliteBusyError, engine, get_db, run_with_sqlite_lock_retry
 from .demo_data import (
     create_demo_command,
     demo_alerts,
@@ -151,7 +152,12 @@ async def reliability_worker(stop: asyncio.Event) -> None:
         except TimeoutError:
             with SessionLocal() as db:
                 try:
-                    scan_reliability(db, datetime.now(UTC), settings.offline_after_seconds)
+                    scan_now = datetime.now(UTC)
+                    run_with_sqlite_lock_retry(
+                        db,
+                        partial(scan_reliability, db, scan_now, settings.offline_after_seconds),
+                        operation_name="reliability_scan",
+                    )
                 except Exception:
                     logger.exception("reliability_scan_failed")
 
@@ -1248,49 +1254,52 @@ def list_commands(
     ]
 
 
-@app.post("/device-commands/claim", response_model=list[CommandOut])
-def claim_commands(
-    db: Session = Depends(get_db),
-    x_device_id: str = Header(..., alias="X-Device-ID"),
-    x_device_key: str = Header(..., alias="X-Device-Key"),
-) -> list[DeviceCommand]:
-    device = get_device_or_401(db, x_device_id, x_device_key)
+def _claim_commands_once(db: Session, device_id: int) -> list[DeviceCommand]:
     now = datetime.now(UTC)
     lease_expires_at = now + timedelta(seconds=settings.command_lease_seconds)
-    db.execute(
-        update(DeviceCommand)
-        .where(
-            DeviceCommand.device_id == device.id,
-            DeviceCommand.expires_at.is_(None),
-            DeviceCommand.status.in_(("PENDING", "CLAIMED")),
+    missing_deadline = (
+        db.scalar(
+            select(DeviceCommand.id)
+            .where(
+                DeviceCommand.device_id == device_id,
+                DeviceCommand.expires_at.is_(None),
+                DeviceCommand.status.in_(("PENDING", "CLAIMED")),
+            )
+            .limit(1)
         )
-        .values(status="EXPIRED", completed_at=now, result="missing_delivery_deadline")
+        is not None
     )
-    db.execute(
-        update(DeviceCommand)
-        .where(
-            DeviceCommand.device_id == device.id,
-            DeviceCommand.expires_at.is_not(None),
-            DeviceCommand.expires_at <= now,
-            DeviceCommand.status == "PENDING",
+    expired_pending = (
+        db.scalar(
+            select(DeviceCommand.id)
+            .where(
+                DeviceCommand.device_id == device_id,
+                DeviceCommand.expires_at.is_not(None),
+                DeviceCommand.expires_at <= now,
+                DeviceCommand.status == "PENDING",
+            )
+            .limit(1)
         )
-        .values(status="EXPIRED", completed_at=now, result="expired_before_delivery")
+        is not None
     )
-    db.execute(
-        update(DeviceCommand)
-        .where(
-            DeviceCommand.device_id == device.id,
-            DeviceCommand.expires_at.is_not(None),
-            DeviceCommand.expires_at <= now - timedelta(seconds=settings.command_result_grace_seconds),
-            DeviceCommand.status == "CLAIMED",
+    timed_out_claim = (
+        db.scalar(
+            select(DeviceCommand.id)
+            .where(
+                DeviceCommand.device_id == device_id,
+                DeviceCommand.expires_at.is_not(None),
+                DeviceCommand.expires_at <= now - timedelta(seconds=settings.command_result_grace_seconds),
+                DeviceCommand.status == "CLAIMED",
+            )
+            .limit(1)
         )
-        .values(status="EXPIRED", completed_at=now, result="terminal_result_timeout_after_claim")
+        is not None
     )
     eligible_ids = list(
         db.scalars(
             select(DeviceCommand.id)
             .where(
-                DeviceCommand.device_id == device.id,
+                DeviceCommand.device_id == device_id,
                 DeviceCommand.expires_at > now,
                 or_(
                     DeviceCommand.status == "PENDING",
@@ -1301,12 +1310,47 @@ def claim_commands(
             .limit(10)
         )
     )
-    commands: list[DeviceCommand] = []
-    for command_id in eligible_ids:
-        claimed = db.execute(
+    db.rollback()
+    if not missing_deadline and not expired_pending and not timed_out_claim and not eligible_ids:
+        return []
+
+    if missing_deadline:
+        db.execute(
             update(DeviceCommand)
             .where(
-                DeviceCommand.id == command_id,
+                DeviceCommand.device_id == device_id,
+                DeviceCommand.expires_at.is_(None),
+                DeviceCommand.status.in_(("PENDING", "CLAIMED")),
+            )
+            .values(status="EXPIRED", completed_at=now, result="missing_delivery_deadline")
+        )
+    if expired_pending:
+        db.execute(
+            update(DeviceCommand)
+            .where(
+                DeviceCommand.device_id == device_id,
+                DeviceCommand.expires_at.is_not(None),
+                DeviceCommand.expires_at <= now,
+                DeviceCommand.status == "PENDING",
+            )
+            .values(status="EXPIRED", completed_at=now, result="expired_before_delivery")
+        )
+    if timed_out_claim:
+        db.execute(
+            update(DeviceCommand)
+            .where(
+                DeviceCommand.device_id == device_id,
+                DeviceCommand.expires_at.is_not(None),
+                DeviceCommand.expires_at <= now - timedelta(seconds=settings.command_result_grace_seconds),
+                DeviceCommand.status == "CLAIMED",
+            )
+            .values(status="EXPIRED", completed_at=now, result="terminal_result_timeout_after_claim")
+        )
+    if eligible_ids:
+        db.execute(
+            update(DeviceCommand)
+            .where(
+                DeviceCommand.id.in_(eligible_ids),
                 DeviceCommand.expires_at.is_not(None),
                 DeviceCommand.expires_at > now,
                 or_(
@@ -1316,12 +1360,42 @@ def claim_commands(
             )
             .values(status="CLAIMED", claimed_at=now, lease_expires_at=lease_expires_at)
         )
-        if claimed.rowcount == 1:
-            command = db.get(DeviceCommand, command_id)
-            if command is not None:
-                commands.append(command)
+    commands = list(
+        db.scalars(
+            select(DeviceCommand)
+            .where(
+                DeviceCommand.id.in_(eligible_ids),
+                DeviceCommand.claimed_at == now,
+                DeviceCommand.lease_expires_at == lease_expires_at,
+            )
+            .order_by(DeviceCommand.created_at)
+        )
+    )
     db.commit()
     return commands
+
+
+@app.post("/device-commands/claim", response_model=list[CommandOut])
+def claim_commands(
+    db: Session = Depends(get_db),
+    x_device_id: str = Header(..., alias="X-Device-ID"),
+    x_device_key: str = Header(..., alias="X-Device-Key"),
+) -> list[DeviceCommand]:
+    device = get_device_or_401(db, x_device_id, x_device_key)
+    device_id = device.id
+    db.rollback()
+    try:
+        return run_with_sqlite_lock_retry(
+            db,
+            lambda: _claim_commands_once(db, device_id),
+            operation_name="claim_commands",
+        )
+    except SqliteBusyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Command queue is temporarily busy; retry shortly",
+            headers={"Retry-After": "1"},
+        ) from exc
 
 
 @app.post("/device-commands/{command_id}/complete", response_model=CommandOut)
@@ -1368,7 +1442,19 @@ def run_reliability_scan(
     db: Session = Depends(get_db),
     _user: User = Depends(require_operator),
 ) -> ReliabilityScanOut:
-    missed, offline, commands = scan_reliability(db, datetime.now(UTC), settings.offline_after_seconds)
+    scan_now = datetime.now(UTC)
+    try:
+        missed, offline, commands = run_with_sqlite_lock_retry(
+            db,
+            partial(scan_reliability, db, scan_now, settings.offline_after_seconds),
+            operation_name="manual_reliability_scan",
+        )
+    except SqliteBusyError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Reliability scan is temporarily busy; retry shortly",
+            headers={"Retry-After": "1"},
+        ) from exc
     return ReliabilityScanOut(
         missed_feedings_created=missed,
         offline_alerts_created=offline,

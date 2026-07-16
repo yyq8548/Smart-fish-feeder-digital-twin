@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
@@ -262,6 +263,90 @@ def test_concurrent_telemetry_idempotency_race_is_never_a_server_error(
 
     assert post_with_concurrent_winner(1, 4.0) == 200
     assert post_with_concurrent_winner(2, 5.0) == 409
+
+
+def test_empty_command_poll_does_not_acquire_a_write_lock(
+    client: TestClient,
+    device_headers: dict[str, str],
+) -> None:
+    from app.database import engine
+    from sqlalchemy import event
+
+    statements: list[str] = []
+
+    def capture_statement(*args: object) -> None:
+        statements.append(str(args[2]))
+
+    event.listen(engine, "before_cursor_execute", capture_statement)
+    try:
+        response = client.post("/device-commands/claim", headers=device_headers)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_statement)
+
+    assert response.status_code == 200
+    assert response.json() == []
+    assert not any(statement.lstrip().upper().startswith("UPDATE") for statement in statements)
+
+
+def test_telemetry_claim_and_dashboard_queries_are_concurrent_without_server_errors(
+    client: TestClient,
+    device_headers: dict[str, str],
+    operator_headers: dict[str, str],
+) -> None:
+    first_payload = {
+        "device_uid": "feeder-001",
+        "idempotency_key": "concurrency-1",
+        "sequence_number": 1,
+        "recorded_at": datetime.now(UTC).isoformat(),
+        "temperature_c": 4.0,
+        "cooling_on": False,
+        "pump_state": "IDLE",
+        "sensor_status": "OK",
+        "event_type": "heartbeat",
+    }
+    assert client.post("/telemetry", json=first_payload, headers=device_headers).status_code == 200
+    command = client.post(
+        "/devices/feeder-001/commands",
+        json={
+            "idempotency_key": "concurrent-feed",
+            "command_type": "FEED_NOW",
+            "payload": {"duration_ms": 1000},
+        },
+        headers=operator_headers,
+    )
+    assert command.status_code == 201
+
+    def ingest_readings() -> list[int]:
+        statuses: list[int] = []
+        for sequence in range(2, 22):
+            statuses.append(
+                client.post(
+                    "/telemetry",
+                    json={
+                        **first_payload,
+                        "idempotency_key": f"concurrency-{sequence}",
+                        "sequence_number": sequence,
+                        "recorded_at": datetime.now(UTC).isoformat(),
+                    },
+                    headers=device_headers,
+                ).status_code
+            )
+        return statuses
+
+    def claim_queue() -> list[int]:
+        return [client.post("/device-commands/claim", headers=device_headers).status_code for _ in range(30)]
+
+    def read_dashboard() -> list[int]:
+        return [client.get("/telemetry?device_uid=feeder-001", headers=operator_headers).status_code for _ in range(30)]
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        telemetry_future = executor.submit(ingest_readings)
+        claim_future = executor.submit(claim_queue)
+        dashboard_future = executor.submit(read_dashboard)
+
+    assert telemetry_future.result() == [200] * 20
+    assert claim_future.result() == [200] * 30
+    assert dashboard_future.result() == [200] * 30
 
 
 def test_timestamp_and_sensor_validation(

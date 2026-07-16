@@ -320,6 +320,9 @@ Replace every placeholder with a unique high-entropy value, configure separate d
 - Durable devices, telemetry, schedules, executions, commands, and alerts
 - ESP32 NVS replay protection and terminal-result retry behavior
 - Alembic database migrations and container health checks
+- SQLite WAL, a 10-second busy timeout, bounded lock retries, and read-only empty command polls
+- Five-minute host monitoring for public endpoints, MQTT TLS, Resend, containers, backend errors, and offline devices
+- Isolated backup restore drills with schema, integrity, row-count, and rollback evidence
 
 ## Automated verification
 
@@ -327,7 +330,7 @@ GitHub Actions runs the following on every pull request:
 
 - Ruff formatting and linting
 - Strict mypy type checking
-- 79 Python backend, SMTP onboarding, secure device claims, MQTT transport, account-isolation, manufacturing, and Wokwi contract tests
+- 91 Python backend, SMTP onboarding, SQLite concurrency, secure device lifecycle, monitoring, restore, manufacturing, and Wokwi contract tests
 - 34 dashboard tests covering live, demo, QR claims, customer onboarding, schedule management, empty, and failed API states
 - Browser-driven dashboard-to-Wokwi closed-loop verification
 - Python and JavaScript dependency vulnerability audits
@@ -336,7 +339,7 @@ GitHub Actions runs the following on every pull request:
 - Development and production Docker configuration validation
 - Complete Docker Compose build and end-to-end smoke test
 
-The current local suite measures 91.35% Python coverage and 84.53% dashboard line coverage.
+The current local suite measures 91.23% Python coverage and 84.53% dashboard line coverage.
 
 ## Main APIs
 
@@ -360,10 +363,15 @@ firmware/sketch.ino            Preserved original Arduino Mega prototype
 mock_device/                   Local device simulator and MQTT bridge
 simulation/esp32-mqtt/         Wokwi ESP32 virtual hardware
 scripts/manufacture_device.py  One-command device bundle and claim-QR generator
+scripts/production_monitor.py  Host-level health, log, offline-device, and email alert monitor
+scripts/production_restore_drill.sh  Isolated SQLite restore and evidence report
 deploy/                        Production proxy, broker, ACL, and health files
 docs/cloud_deployment.md       VPS, DNS, TLS, secrets, and operations guide
+docs/production_monitoring.md  Timer installation, checks, alert behavior, and diagnostics
+docs/backup_restore_drill.md   Non-destructive database restore exercise
 docs/wiring.md                 ESP32-to-hardware wiring map
 docs/physical_commissioning.md Safe physical bring-up procedure
+docs/physical_acceptance_checklist.md Evidence-oriented first-unit acceptance
 docs/provisioning_without_hardware.md Implemented onboarding and remaining physical acceptance
 docker-compose.yml             Complete local demonstration stack
 docker-compose.production.yml  HTTPS and MQTT/TLS production stack

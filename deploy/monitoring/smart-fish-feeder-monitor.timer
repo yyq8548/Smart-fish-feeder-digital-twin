@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Smart Fish Feeder production checks every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+Persistent=true
+Unit=smart-fish-feeder-monitor.service
+
+[Install]
+WantedBy=timers.target

@@ -1,5 +1,8 @@
 # Physical ESP32 commissioning
 
+Use the evidence-oriented [physical acceptance checklist](physical_acceptance_checklist.md) during the first unit's
+commissioning and do not connect actuator power until its safety gate passes.
+
 This procedure connects the online operator console to a physical feeder while
 keeping actuation disabled until each layer has been verified. The active cloud
 firmware targets an ESP32 DevKit v1; the preserved Arduino Mega sketch is the
