@@ -308,7 +308,7 @@ GitHub Actions runs the following on every pull request:
 
 - Ruff formatting and linting
 - Strict mypy type checking
-- 71 Python backend, MQTT transport, account-isolation, and Wokwi contract tests
+- 73 Python backend, SMTP onboarding, MQTT transport, account-isolation, and Wokwi contract tests
 - 32 dashboard tests covering live, demo, customer onboarding, schedule management, empty, and failed API states
 - Browser-driven dashboard-to-Wokwi closed-loop verification
 - Python and JavaScript dependency vulnerability audits
@@ -317,7 +317,7 @@ GitHub Actions runs the following on every pull request:
 - Development and production Docker configuration validation
 - Complete Docker Compose build and end-to-end smoke test
 
-The latest successful CI run measured 89.84% Python coverage and 84.75% dashboard line coverage.
+The current local suite measures 90.20% Python coverage and 84.75% dashboard line coverage.
 
 ## Main APIs
 

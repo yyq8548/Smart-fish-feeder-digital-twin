@@ -253,3 +253,158 @@ def test_console_and_smtp_email_delivery(monkeypatch: pytest.MonkeyPatch) -> Non
     email_delivery.deliver_account_email("person@example.com", "Verify", "Follow the link")
     assert "tls" in sent
     assert ("smtp-user", "smtp-pass") in sent
+
+
+def test_failed_registration_email_rolls_back_customer(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.main as main_module
+    from app.database import SessionLocal
+    from app.models import User
+    from sqlalchemy import select
+
+    def reject_delivery(*_args: object) -> None:
+        raise OSError("SMTP unavailable")
+
+    monkeypatch.setattr(main_module, "deliver_account_email", reject_delivery)
+    response = client.post(
+        "/auth/register",
+        json={"email": "delivery-failed@example.com", "password": "SecureFeeder42"},
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Verification email could not be sent"
+
+    with SessionLocal() as db:
+        assert db.scalar(select(User).where(User.email == "delivery-failed@example.com")) is None
+
+
+def test_customer_onboarding_reaches_first_completed_feed_through_smtp(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    operator_headers: dict[str, str],
+) -> None:
+    import app.email_delivery as email_delivery
+
+    smtp_events: list[object] = []
+    delivered_messages: list[object] = []
+
+    class FakeSmtp:
+        def __init__(self, host: str, port: int, timeout: int) -> None:
+            smtp_events.append((host, port, timeout))
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def starttls(self) -> None:
+            smtp_events.append("tls")
+
+        def login(self, username: str, password: str) -> None:
+            smtp_events.append((username, password))
+
+        def send_message(self, message: object) -> None:
+            delivered_messages.append(message)
+
+    monkeypatch.setattr(email_delivery.settings, "email_delivery_mode", "smtp")
+    monkeypatch.setattr(email_delivery.settings, "smtp_host", "smtp.example.com")
+    monkeypatch.setattr(email_delivery.settings, "smtp_port", 587)
+    monkeypatch.setattr(email_delivery.settings, "smtp_from_email", "accounts@smartfishfeeder.org")
+    monkeypatch.setattr(email_delivery.settings, "smtp_username", "smtp-user")
+    monkeypatch.setattr(email_delivery.settings, "smtp_password", "smtp-app-password")
+    monkeypatch.setattr(email_delivery.settings, "smtp_starttls", True)
+    monkeypatch.setattr(smtplib, "SMTP", FakeSmtp)
+
+    provisioned = client.post(
+        "/devices",
+        json={"device_uid": "onboarding-feeder", "name": "Onboarding feeder"},
+        headers=operator_headers,
+    )
+    assert provisioned.status_code == 201
+    device = provisioned.json()
+
+    email = "new-owner@example.com"
+    password = "SecureFeeder42"
+    registered = client.post("/auth/register", json={"email": email, "password": password})
+    assert registered.status_code == 202
+    assert len(delivered_messages) == 1
+    verification_message = delivered_messages[-1]
+    assert verification_message["From"] == "accounts@smartfishfeeder.org"  # type: ignore[index]
+    assert verification_message["To"] == email  # type: ignore[index]
+    verification_token = _token_from_email(verification_message.get_content(), "verify_token")  # type: ignore[attr-defined]
+
+    assert client.post("/auth/verify-email", json={"token": verification_token}).status_code == 200
+    login = client.post("/auth/token", data={"username": email, "password": password})
+    assert login.status_code == 200
+    customer_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    paired = client.post(
+        "/devices/pair",
+        json={"device_uid": device["device_uid"], "pairing_code": device["pairing_code"]},
+        headers=customer_headers,
+    )
+    assert paired.status_code == 200
+    assert [item["device_uid"] for item in client.get("/devices", headers=customer_headers).json()] == [
+        "onboarding-feeder"
+    ]
+
+    device_headers = {"X-Device-ID": device["device_uid"], "X-Device-Key": device["api_key"]}
+    heartbeat = client.post(
+        "/telemetry",
+        json={
+            "device_uid": device["device_uid"],
+            "idempotency_key": "onboarding-heartbeat-1",
+            "sequence_number": 1,
+            "recorded_at": datetime.now(UTC).isoformat(),
+            "temperature_c": 4.3,
+            "cooling_on": False,
+            "pump_state": "IDLE",
+            "sensor_status": "OK",
+            "event_type": "heartbeat",
+        },
+        headers=device_headers,
+    )
+    assert heartbeat.status_code == 200
+    assert client.get("/device-status?device_uid=onboarding-feeder", headers=customer_headers).json()["online"] is True
+
+    submitted = client.post(
+        "/devices/onboarding-feeder/commands",
+        json={
+            "idempotency_key": "first-customer-feed",
+            "command_type": "FEED_NOW",
+            "payload": {"duration_ms": 1_000},
+        },
+        headers=customer_headers,
+    )
+    assert submitted.status_code == 201
+    claimed = client.post("/device-commands/claim", headers=device_headers)
+    assert claimed.status_code == 200
+    assert [command["id"] for command in claimed.json()] == [submitted.json()["id"]]
+    completed = client.post(
+        f"/device-commands/{submitted.json()['id']}/complete",
+        json={"status": "COMPLETED", "result": "feeding_and_cleaning_completed"},
+        headers=device_headers,
+    )
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "COMPLETED"
+    assert completed.json()["result"] == "feeding_and_cleaning_completed"
+    command_history = client.get("/devices/onboarding-feeder/commands", headers=customer_headers).json()
+    assert command_history[0]["status"] == "COMPLETED"
+
+    reset_requested = client.post("/auth/password-reset/request", json={"email": email})
+    assert reset_requested.status_code == 202
+    assert len(delivered_messages) == 2
+    reset_token = _token_from_email(delivered_messages[-1].get_content(), "reset_token")  # type: ignore[attr-defined]
+    new_password = "ReplacementFeeder84"
+    assert (
+        client.post(
+            "/auth/password-reset/confirm",
+            json={"token": reset_token, "password": new_password},
+        ).status_code
+        == 200
+    )
+    assert client.post("/auth/token", data={"username": email, "password": new_password}).status_code == 200
+    assert smtp_events.count("tls") == 2
+    assert smtp_events.count(("smtp-user", "smtp-app-password")) == 2
