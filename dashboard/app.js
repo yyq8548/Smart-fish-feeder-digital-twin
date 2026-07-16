@@ -178,11 +178,53 @@ export async function confirmCustomerPasswordReset(token, password, { fetchImpl 
 }
 
 export async function pairCustomerDevice(deviceUid, pairingCode, token, { fetchImpl = fetch } = {}) {
-  return requestJson("/devices/pair", {
+  return requestJson("/devices/claim", {
     fetchImpl,
     method: "POST",
     token,
-    jsonBody: { device_uid: deviceUid, pairing_code: pairingCode }
+    jsonBody: { device_uid: deviceUid, proof_of_possession: pairingCode }
+  });
+}
+
+export function parseDeviceClaimPayload(value, baseHref = "http://localhost/") {
+  const raw = String(value || "").trim();
+  if (!raw) throw new Error("Scan a feeder QR code or enter its setup link.");
+  let deviceUid;
+  let proofOfPossession;
+  if (raw.startsWith("{")) {
+    const payload = JSON.parse(raw);
+    deviceUid = payload.device_uid;
+    proofOfPossession = payload.proof_of_possession || payload.claim_code || payload.pairing_code;
+  } else {
+    const url = new URL(raw, baseHref);
+    deviceUid = url.searchParams.get("device_uid");
+    proofOfPossession = url.searchParams.get("claim_code") || url.searchParams.get("pairing_code");
+  }
+  if (!/^[a-zA-Z0-9_-]{3,80}$/.test(String(deviceUid || ""))) {
+    throw new Error("The QR code does not contain a valid feeder ID.");
+  }
+  if (String(proofOfPossession || "").length < 8 || String(proofOfPossession).length > 64) {
+    throw new Error("The QR code does not contain a valid proof-of-possession.");
+  }
+  return {
+    deviceUid: String(deviceUid),
+    proofOfPossession: String(proofOfPossession)
+  };
+}
+
+export async function createDeviceTransfer(deviceUid, token, { fetchImpl = fetch } = {}) {
+  return requestJson(`/devices/${encodeURIComponent(deviceUid)}/transfer`, {
+    fetchImpl,
+    method: "POST",
+    token
+  });
+}
+
+export async function cancelDeviceTransfer(deviceUid, token, { fetchImpl = fetch } = {}) {
+  return requestJson(`/devices/${encodeURIComponent(deviceUid)}/transfer`, {
+    fetchImpl,
+    method: "DELETE",
+    token
   });
 }
 
@@ -817,14 +859,18 @@ export function createDashboardController({
     const customerPanel = documentRef.getElementById("customerDevicePanel");
     const devicePicker = documentRef.getElementById("devicePicker");
     const unpairButton = documentRef.getElementById("unpairDeviceButton");
+    const transferButton = documentRef.getElementById("transferDeviceButton");
+    const cancelTransferButton = documentRef.getElementById("cancelTransferButton");
     const intro = documentRef.getElementById("pairingIntroText");
     if (customerPanel) customerPanel.hidden = !isCustomer;
     if (devicePicker) devicePicker.hidden = isCustomer && !hasDevice;
     if (unpairButton) unpairButton.hidden = !isCustomer || !hasDevice;
+    if (transferButton) transferButton.hidden = !isCustomer || !hasDevice;
+    if (cancelTransferButton) cancelTransferButton.hidden = !isCustomer || !hasDevice;
     if (intro) {
       intro.textContent = hasDevice
         ? "Pair another feeder, or remove the selected feeder before transferring it to someone else."
-        : "Enter the device UID and one-time pairing code printed with your feeder.";
+        : "Scan the setup QR code, or enter the feeder ID and one-time proof-of-possession.";
     }
   }
 
@@ -1239,7 +1285,7 @@ export function createDashboardController({
     if (!windowRef?.location) return false;
     const url = new URL(windowRef.location.href);
     const pairingDeviceUid = url.searchParams.get("device_uid");
-    const pairingCode = url.searchParams.get("pairing_code");
+    const pairingCode = url.searchParams.get("claim_code") || url.searchParams.get("pairing_code");
     if (pairingDeviceUid && pairingCode) {
       const pairingForm = documentRef.getElementById("devicePairingForm");
       const deviceInput = pairingForm?.querySelector("[name='device_uid']");
@@ -1282,6 +1328,7 @@ export function createDashboardController({
       const loaded = await loadOperator();
       if (loaded) {
         clearAccountQueryParameter("device_uid");
+        clearAccountQueryParameter("claim_code");
         clearAccountQueryParameter("pairing_code");
         setNotice(documentRef.getElementById("pairingMessage"), "Feeder paired to your account.", "normal");
       }
@@ -1289,6 +1336,46 @@ export function createDashboardController({
     } catch (error) {
       setNotice(documentRef.getElementById("pairingMessage"), error.message, "critical");
       return false;
+    }
+  }
+
+  function applyClaimPayload(rawValue) {
+    try {
+      const parsed = parseDeviceClaimPayload(rawValue, documentRef.defaultView?.location?.href);
+      const pairingForm = documentRef.getElementById("devicePairingForm");
+      const deviceInput = pairingForm?.querySelector("[name='device_uid']");
+      const codeInput = pairingForm?.querySelector("[name='pairing_code']");
+      if (deviceInput) deviceInput.value = parsed.deviceUid;
+      if (codeInput) codeInput.value = parsed.proofOfPossession;
+      setNotice(documentRef.getElementById("pairingMessage"), "Setup QR detected. Review and claim this feeder.", "normal");
+      return parsed;
+    } catch (error) {
+      setNotice(documentRef.getElementById("pairingMessage"), error.message, "critical");
+      return null;
+    }
+  }
+
+  async function scanClaimQr(file) {
+    const windowRef = documentRef.defaultView ?? globalThis;
+    if (!file) return null;
+    if (!windowRef.BarcodeDetector || !windowRef.createImageBitmap) {
+      setNotice(
+        documentRef.getElementById("pairingMessage"),
+        "QR scanning is not supported in this browser. Paste the setup link or enter the code manually.",
+        "warning"
+      );
+      return null;
+    }
+    try {
+      const bitmap = await windowRef.createImageBitmap(file);
+      const detector = new windowRef.BarcodeDetector({ formats: ["qr_code"] });
+      const results = await detector.detect(bitmap);
+      bitmap.close?.();
+      if (results.length !== 1) throw new Error("Choose one clear feeder QR code image.");
+      return applyClaimPayload(results[0].rawValue);
+    } catch (error) {
+      setNotice(documentRef.getElementById("pairingMessage"), error.message, "critical");
+      return null;
     }
   }
 
@@ -1310,9 +1397,37 @@ export function createDashboardController({
       await loadOperator();
       setNotice(
         documentRef.getElementById("pairingMessage"),
-        `Feeder removed. New one-time pairing code: ${response.pairing_code}`,
+        `Feeder removed. New one-time proof-of-possession: ${response.proof_of_possession || response.pairing_code}`,
         "warning"
       );
+      return true;
+    } catch (error) {
+      setNotice(documentRef.getElementById("pairingMessage"), error.message, "critical");
+      return false;
+    }
+  }
+
+  async function createTransferOffer() {
+    if (!state.token || !state.deviceUid || state.userRole !== "customer") return false;
+    try {
+      const offer = await createDeviceTransfer(state.deviceUid, state.token, { fetchImpl });
+      setNotice(
+        documentRef.getElementById("pairingMessage"),
+        `Transfer link (expires ${formatTime(offer.expires_at)}): ${offer.claim_url}`,
+        "warning"
+      );
+      return offer;
+    } catch (error) {
+      setNotice(documentRef.getElementById("pairingMessage"), error.message, "critical");
+      return false;
+    }
+  }
+
+  async function cancelTransferOffer() {
+    if (!state.token || !state.deviceUid || state.userRole !== "customer") return false;
+    try {
+      await cancelDeviceTransfer(state.deviceUid, state.token, { fetchImpl });
+      setNotice(documentRef.getElementById("pairingMessage"), "Transfer link cancelled.", "normal");
       return true;
     } catch (error) {
       setNotice(documentRef.getElementById("pairingMessage"), error.message, "critical");
@@ -1515,7 +1630,19 @@ export function createDashboardController({
         if (paired) formElement.reset();
       });
     });
+    documentRef.getElementById("scanDeviceQrButton")?.addEventListener("click", () => {
+      documentRef.getElementById("deviceQrInput")?.click();
+    });
+    documentRef.getElementById("deviceQrInput")?.addEventListener("change", (event) => {
+      scanClaimQr(event.currentTarget.files?.[0]);
+      event.currentTarget.value = "";
+    });
+    documentRef.getElementById("claimLinkInput")?.addEventListener("change", (event) => {
+      applyClaimPayload(event.currentTarget.value);
+    });
     documentRef.getElementById("unpairDeviceButton")?.addEventListener("click", () => unpairSelectedDevice());
+    documentRef.getElementById("transferDeviceButton")?.addEventListener("click", () => createTransferOffer());
+    documentRef.getElementById("cancelTransferButton")?.addEventListener("click", () => cancelTransferOffer());
     documentRef.getElementById("scheduleForm")?.addEventListener("submit", (event) => {
       event.preventDefault();
       const formElement = event.currentTarget;
@@ -1588,7 +1715,10 @@ export function createDashboardController({
   }
 
   return {
+    applyClaimPayload,
+    cancelTransferOffer,
     confirmPasswordReset,
+    createTransferOffer,
     createSchedule,
     initialize,
     issueCommand,
@@ -1601,6 +1731,7 @@ export function createDashboardController({
     refreshSchedule,
     register,
     requestPasswordReset,
+    scanClaimQr,
     state,
     toggleSchedule,
     removeSchedule,

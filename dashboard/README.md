@@ -33,7 +33,8 @@ The dashboard uses:
 - `POST /auth/password-reset/confirm`
 - `GET /users/me`
 - `GET /devices`
-- `POST /devices/pair`
+- `POST /devices/claim`
+- `POST/DELETE /devices/{device_uid}/transfer`
 - `DELETE /devices/{device_uid}/pairing`
 - `GET /device-status`
 - `GET /telemetry`

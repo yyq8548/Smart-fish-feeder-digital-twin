@@ -1,6 +1,6 @@
 import re
 import smtplib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -215,6 +215,137 @@ def test_customer_device_pairing_and_tenant_isolation(
         ).status_code
         == 200
     )
+
+
+def test_expiring_claim_transfer_and_device_credential_lifecycle(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    operator_headers: dict[str, str],
+) -> None:
+    from app.database import SessionLocal
+    from app.models import Device
+    from sqlalchemy import select
+
+    manufactured = client.post(
+        "/devices",
+        json={"device_uid": "claimable-feeder", "name": "Claimable feeder"},
+        headers=operator_headers,
+    ).json()
+    assert manufactured["proof_of_possession"] == manufactured["pairing_code"]
+    assert "claim_code=" in manufactured["claim_url"]
+    assert manufactured["claim_expires_at"] is not None
+    assert manufactured["credential_version"] == 1
+
+    alice = _register_verified_customer(client, monkeypatch, "claim-alice@example.com")
+    bob = _register_verified_customer(client, monkeypatch, "claim-bob@example.com")
+    with SessionLocal() as db:
+        device = db.scalar(select(Device).where(Device.device_uid == "claimable-feeder"))
+        assert device is not None
+        device.claim_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+    assert (
+        client.post(
+            "/devices/claim",
+            json={
+                "device_uid": manufactured["device_uid"],
+                "proof_of_possession": manufactured["proof_of_possession"],
+            },
+            headers=alice,
+        ).status_code
+        == 404
+    )
+    refreshed_claim = client.post(
+        "/devices/claimable-feeder/pairing-code",
+        headers=operator_headers,
+    ).json()
+    claimed = client.post(
+        "/devices/claim",
+        json={
+            "device_uid": manufactured["device_uid"],
+            "proof_of_possession": refreshed_claim["proof_of_possession"],
+        },
+        headers=alice,
+    )
+    assert claimed.status_code == 200
+    assert claimed.json()["claim_consumed_at"] is not None
+    assert (
+        client.post(
+            "/devices/claim",
+            json={
+                "device_uid": manufactured["device_uid"],
+                "proof_of_possession": refreshed_claim["proof_of_possession"],
+            },
+            headers=bob,
+        ).status_code
+        == 404
+    )
+
+    expired_offer = client.post("/devices/claimable-feeder/transfer", headers=alice)
+    assert expired_offer.status_code == 200
+    with SessionLocal() as db:
+        device = db.scalar(select(Device).where(Device.device_uid == "claimable-feeder"))
+        assert device is not None
+        device.transfer_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+    assert (
+        client.post(
+            "/devices/claim",
+            json={
+                "device_uid": "claimable-feeder",
+                "proof_of_possession": expired_offer.json()["proof_of_possession"],
+            },
+            headers=bob,
+        ).status_code
+        == 404
+    )
+
+    transfer = client.post("/devices/claimable-feeder/transfer", headers=alice)
+    assert transfer.status_code == 200
+    assert "claim_code=" in transfer.json()["claim_url"]
+    transferred = client.post(
+        "/devices/claim",
+        json={
+            "device_uid": "claimable-feeder",
+            "proof_of_possession": transfer.json()["proof_of_possession"],
+        },
+        headers=bob,
+    )
+    assert transferred.status_code == 200
+    assert client.get("/devices", headers=alice).json() == []
+    assert [item["device_uid"] for item in client.get("/devices", headers=bob).json()] == ["claimable-feeder"]
+    assert client.delete("/devices/claimable-feeder/transfer", headers=alice).status_code == 404
+
+    rotated = client.post("/devices/claimable-feeder/rotate-key", headers=operator_headers)
+    assert rotated.status_code == 200
+    assert rotated.json()["credential_version"] == 2
+    old_headers = {"X-Device-ID": "claimable-feeder", "X-Device-Key": manufactured["api_key"]}
+    telemetry = {
+        "device_uid": "claimable-feeder",
+        "idempotency_key": "credential-check",
+        "sequence_number": 1,
+        "recorded_at": datetime.now(UTC).isoformat(),
+        "temperature_c": 4.3,
+        "cooling_on": False,
+        "pump_state": "IDLE",
+        "sensor_status": "OK",
+        "event_type": "heartbeat",
+    }
+    assert client.post("/telemetry", json=telemetry, headers=old_headers).status_code == 401
+    rotated_headers = {"X-Device-ID": "claimable-feeder", "X-Device-Key": rotated.json()["api_key"]}
+    assert client.post("/telemetry", json=telemetry, headers=rotated_headers).status_code == 200
+
+    revoked = client.post("/devices/claimable-feeder/revoke", headers=operator_headers)
+    assert revoked.status_code == 200
+    assert revoked.json()["active"] is False
+    assert revoked.json()["credential_version"] == 3
+    assert (
+        client.post("/telemetry", json={**telemetry, "idempotency_key": "revoked"}, headers=rotated_headers).status_code
+        == 401
+    )
+    activated = client.post("/devices/claimable-feeder/activate", headers=operator_headers)
+    assert activated.status_code == 200
+    assert activated.json()["active"] is True
+    assert activated.json()["credential_version"] == 4
 
 
 def test_console_and_smtp_email_delivery(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -6,7 +6,9 @@ Operators obtain a JWT from `POST /auth/token`. Customers register by email, ver
 
 Customer accounts see only rows connected to a device whose `owner_user_id` matches the authenticated user. This ownership predicate applies to device lists, telemetry, status, schedules, feeding executions, alerts, acknowledgements, and commands. Unauthorized device identifiers return `404` so one customer cannot enumerate another customer's hardware.
 
-An operator-provisioned device includes a one-time pairing code stored only as a keyed hash. `POST /devices/pair` consumes that code and assigns the device to the verified customer. Unpairing rotates the code before releasing ownership, which supports a controlled physical transfer without reusing the original credential.
+An operator-provisioned device includes a high-entropy, expiring proof-of-possession stored only as a keyed hash. The printed QR contains only the device UID and this one-time claim secret; it never contains API, MQTT, or HMAC credentials. `POST /devices/claim` atomically consumes the proof and assigns the device to the verified customer. The older `POST /devices/pair` contract remains as a compatibility alias.
+
+An owner can create a short-lived transfer offer without disconnecting the feeder. A recipient who presents that transfer proof becomes the new owner atomically, and replaying the proof fails. The current owner can cancel an unused offer. Unpairing instead releases the feeder immediately and creates a fresh expiring claim proof. Operator-only credential rotation increments a version, revocation immediately blocks device authentication, and reactivation always returns a new API key.
 
 ## Telemetry ingestion
 

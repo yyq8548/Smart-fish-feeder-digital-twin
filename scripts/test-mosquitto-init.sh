@@ -15,10 +15,11 @@ docker run --rm \
   -e MQTT_BRIDGE_PASSWORD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
   -e MQTT_DEVICE_USERNAME=feeder-test \
   -e MQTT_DEVICE_PASSWORD=dddddddddddddddddddddddddddddddddddddddd \
+  -e MQTT_DEVICE_CREDENTIALS='feeder-extra:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' \
   -e FISH_FEEDER_DEVICE_API_KEY=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   -e FISH_FEEDER_CREDENTIAL_PEPPER=pppppppppppppppppppppppppppppppppppppppp \
   -e FISH_FEEDER_ADMIN_PASSWORD=mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm \
   -e FISH_FEEDER_JWT_SECRET=jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj \
   -e MQTT_SHARED_SECRET=ssssssssssssssssssssssssssssssssssssssss \
   eclipse-mosquitto:2.1.2-alpine \
-  /init/init-passwords.sh
+  -c 'sh /init/init-passwords.sh && grep -q "^feeder-test:" /mosquitto/secrets/passwords && grep -q "^feeder-extra:" /mosquitto/secrets/passwords'

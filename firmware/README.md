@@ -93,6 +93,22 @@ port 1883. For physical hardware, copy
 destination is ignored by Git and loaded automatically. Do not commit broker,
 WiFi, or HMAC credentials.
 
+For a production unit, leave `FEEDER_WIFI_SSID` empty and enable
+`FEEDER_ENABLE_SOFTAP_PROVISIONING`. On first boot the feeder starts a
+`FishFeeder-<device_uid>` access point and serves a local setup form at
+`http://192.168.4.1/`. The submitted WiFi credentials are validated, stored in
+the `feeder_net` NVS namespace, and used after restart. Holding GPIO 0 low for
+three seconds during boot clears only the network credentials and returns the
+device to setup mode; it does not erase the MQTT replay watermark. Configure a
+unique `FEEDER_PROVISIONING_AP_PASSWORD` of at least eight characters for every
+physical unit. The generated manufacturing bundle supplies this value.
+
+The firmware exposes `GET /status` and `POST /configure` only while its local
+setup access point is active. Cloud ownership is a separate operation: the QR
+label contains a one-time proof-of-possession, while long-term MQTT, HMAC, and
+API credentials remain in the protected manufacturing bundle and never appear
+in the QR code.
+
 For a cloud broker, set `FEEDER_MQTT_USE_TLS=1`, use the broker's TLS port
 (normally 8883), set `FEEDER_MQTT_USERNAME` and `FEEDER_MQTT_PASSWORD`, and put
 the provider's PEM root CA in `FEEDER_MQTT_ROOT_CA`. The ESP32 uses

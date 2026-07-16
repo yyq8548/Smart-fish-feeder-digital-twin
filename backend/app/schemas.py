@@ -91,6 +91,11 @@ class DevicePairRequest(BaseModel):
     pairing_code: str = Field(min_length=8, max_length=64)
 
 
+class DeviceClaimRequest(BaseModel):
+    device_uid: str = Field(min_length=3, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
+    proof_of_possession: str = Field(min_length=8, max_length=64)
+
+
 class DeviceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -98,6 +103,10 @@ class DeviceOut(BaseModel):
     name: str
     owner_user_id: int | None
     active: bool
+    credential_version: int
+    claim_expires_at: datetime | None
+    claim_consumed_at: datetime | None
+    transfer_expires_at: datetime | None
     last_sequence_number: int | None
     last_seen_at: datetime | None
     created_at: datetime
@@ -105,13 +114,24 @@ class DeviceOut(BaseModel):
 
 class DeviceProvisioned(DeviceOut):
     api_key: str
+    proof_of_possession: str | None = None
+    claim_url: str | None = None
     pairing_code: str | None = None
     pairing_url: str | None = None
 
 
 class DevicePairingResult(DeviceOut):
+    proof_of_possession: str | None = None
+    claim_url: str | None = None
     pairing_code: str | None = None
     pairing_url: str | None = None
+
+
+class DeviceTransferOffer(BaseModel):
+    device_uid: str
+    proof_of_possession: str
+    claim_url: str
+    expires_at: datetime
 
 
 class TelemetryIn(BaseModel):

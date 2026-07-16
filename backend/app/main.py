@@ -38,12 +38,14 @@ from .schemas import (
     CommandComplete,
     CommandCreate,
     CommandOut,
+    DeviceClaimRequest,
     DeviceCreate,
     DeviceOut,
     DevicePairingResult,
     DevicePairRequest,
     DeviceProvisioned,
     DeviceStatus,
+    DeviceTransferOffer,
     FeedingExecutionOut,
     HealthResponse,
     MessageResponse,
@@ -269,6 +271,24 @@ def pairing_url(device_uid: str, pairing_code: str) -> str:
         f"{settings.public_app_url.rstrip('/')}?device_uid={quote(device_uid)}"
         f"&pairing_code={quote(pairing_code)}#dashboard"
     )
+
+
+def claim_url(device_uid: str, proof_of_possession: str) -> str:
+    return (
+        f"{settings.public_app_url.rstrip('/')}?device_uid={quote(device_uid)}"
+        f"&claim_code={quote(proof_of_possession)}#dashboard"
+    )
+
+
+def expires_at(hours: int) -> datetime:
+    return datetime.now(UTC) + timedelta(hours=hours)
+
+
+def timestamp_has_expired(value: datetime | None, now: datetime | None = None) -> bool:
+    if value is None:
+        return False
+    normalized = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    return normalized <= (now or datetime.now(UTC))
 
 
 def account_user_from_token(db: Session, token: str, purpose: str) -> User:
@@ -525,12 +545,15 @@ def provision_device(
         name=payload.name,
         api_key_hash=hash_device_key(api_key),
         pairing_code_hash=hash_pairing_code(pairing_code),
+        claim_expires_at=expires_at(settings.device_claim_expire_hours),
     )
     db.add(device)
     db.commit()
     db.refresh(device)
     return DeviceProvisioned(
         api_key=api_key,
+        proof_of_possession=pairing_code,
+        claim_url=claim_url(device.device_uid, pairing_code),
         pairing_code=pairing_code,
         pairing_url=pairing_url(device.device_uid, pairing_code),
         **DeviceOut.model_validate(device).model_dump(),
@@ -549,6 +572,56 @@ def list_devices(db: Session = Depends(get_db), user: User = Depends(get_current
     return [DeviceOut.model_validate(device) for device in db.scalars(query)]
 
 
+def claim_device_for_customer(
+    request: Request,
+    device_uid: str,
+    proof_of_possession: str,
+    db: Session,
+    user: User,
+) -> DevicePairingResult:
+    client = request.client.host if request.client else "unknown"
+    rate_limit_or_429(f"pair:{client}:{user.id}", settings.pairing_rate_limit_per_minute)
+    device = db.scalar(select(Device).where(Device.device_uid == device_uid, Device.active.is_(True)))
+    supplied_hash = hash_pairing_code(proof_of_possession)
+    claim_matches = (
+        device is not None
+        and device.owner_user_id is None
+        and device.pairing_code_hash is not None
+        and not timestamp_has_expired(device.claim_expires_at)
+        and secrets.compare_digest(supplied_hash, device.pairing_code_hash)
+    )
+    transfer_matches = (
+        device is not None
+        and device.owner_user_id is not None
+        and device.owner_user_id != user.id
+        and device.transfer_code_hash is not None
+        and not timestamp_has_expired(device.transfer_expires_at)
+        and secrets.compare_digest(supplied_hash, device.transfer_code_hash)
+    )
+    if not claim_matches and not transfer_matches:
+        raise HTTPException(status_code=404, detail="Device UID or proof-of-possession is invalid or expired")
+    assert device is not None
+    device.owner_user_id = user.id
+    device.pairing_code_hash = None
+    device.claim_expires_at = None
+    device.claim_consumed_at = datetime.now(UTC)
+    device.transfer_code_hash = None
+    device.transfer_expires_at = None
+    db.commit()
+    db.refresh(device)
+    return DevicePairingResult.model_validate(device)
+
+
+@app.post("/devices/claim", response_model=DevicePairingResult)
+def claim_device(
+    request: Request,
+    payload: DeviceClaimRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_customer),
+) -> DevicePairingResult:
+    return claim_device_for_customer(request, payload.device_uid, payload.proof_of_possession, db, user)
+
+
 @app.post("/devices/pair", response_model=DevicePairingResult)
 def pair_device(
     request: Request,
@@ -556,22 +629,8 @@ def pair_device(
     db: Session = Depends(get_db),
     user: User = Depends(require_customer),
 ) -> DevicePairingResult:
-    client = request.client.host if request.client else "unknown"
-    rate_limit_or_429(f"pair:{client}:{user.id}", settings.pairing_rate_limit_per_minute)
-    device = db.scalar(select(Device).where(Device.device_uid == payload.device_uid, Device.active.is_(True)))
-    if (
-        device is None
-        or device.pairing_code_hash is None
-        or not secrets.compare_digest(hash_pairing_code(payload.pairing_code), device.pairing_code_hash)
-    ):
-        raise HTTPException(status_code=404, detail="Device UID or pairing code is invalid")
-    if device.owner_user_id is not None and device.owner_user_id != user.id:
-        raise HTTPException(status_code=409, detail="This feeder is already paired to another account")
-    device.owner_user_id = user.id
-    device.pairing_code_hash = None
-    db.commit()
-    db.refresh(device)
-    return DevicePairingResult.model_validate(device)
+    """Backward-compatible alias for customers with an older printed pairing code."""
+    return claim_device_for_customer(request, payload.device_uid, payload.pairing_code, db, user)
 
 
 @app.post("/devices/{device_uid}/pairing-code", response_model=DevicePairingResult)
@@ -581,11 +640,17 @@ def rotate_pairing_code(
     _user: User = Depends(require_operator),
 ) -> DevicePairingResult:
     device = get_device_or_404(db, device_uid)
+    if device.owner_user_id is not None:
+        raise HTTPException(status_code=409, detail="Use an ownership transfer code for a paired feeder")
     pairing_code = new_pairing_code()
     device.pairing_code_hash = hash_pairing_code(pairing_code)
+    device.claim_expires_at = expires_at(settings.device_claim_expire_hours)
+    device.claim_consumed_at = None
     db.commit()
     db.refresh(device)
     return DevicePairingResult(
+        proof_of_possession=pairing_code,
+        claim_url=claim_url(device.device_uid, pairing_code),
         pairing_code=pairing_code,
         pairing_url=pairing_url(device.device_uid, pairing_code),
         **DeviceOut.model_validate(device).model_dump(),
@@ -602,13 +667,54 @@ def unpair_device(
     pairing_code = new_pairing_code()
     device.owner_user_id = None
     device.pairing_code_hash = hash_pairing_code(pairing_code)
+    device.claim_expires_at = expires_at(settings.device_claim_expire_hours)
+    device.claim_consumed_at = None
+    device.transfer_code_hash = None
+    device.transfer_expires_at = None
     db.commit()
     db.refresh(device)
     return DevicePairingResult(
+        proof_of_possession=pairing_code,
+        claim_url=claim_url(device.device_uid, pairing_code),
         pairing_code=pairing_code,
         pairing_url=pairing_url(device.device_uid, pairing_code),
         **DeviceOut.model_validate(device).model_dump(),
     )
+
+
+@app.post("/devices/{device_uid}/transfer", response_model=DeviceTransferOffer)
+def create_device_transfer(
+    device_uid: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_account_user),
+) -> DeviceTransferOffer:
+    device = get_accessible_device_or_404(db, device_uid, user)
+    if device.owner_user_id is None:
+        raise HTTPException(status_code=409, detail="This feeder is not currently owned")
+    transfer_code = new_pairing_code()
+    transfer_expiry = expires_at(settings.device_transfer_expire_hours)
+    device.transfer_code_hash = hash_pairing_code(transfer_code)
+    device.transfer_expires_at = transfer_expiry
+    db.commit()
+    return DeviceTransferOffer(
+        device_uid=device.device_uid,
+        proof_of_possession=transfer_code,
+        claim_url=claim_url(device.device_uid, transfer_code),
+        expires_at=transfer_expiry,
+    )
+
+
+@app.delete("/devices/{device_uid}/transfer", response_model=MessageResponse)
+def cancel_device_transfer(
+    device_uid: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_account_user),
+) -> MessageResponse:
+    device = get_accessible_device_or_404(db, device_uid, user)
+    device.transfer_code_hash = None
+    device.transfer_expires_at = None
+    db.commit()
+    return MessageResponse(message="Device transfer cancelled.")
 
 
 @app.post("/devices/{device_uid}/rotate-key", response_model=DeviceProvisioned)
@@ -620,6 +726,39 @@ def rotate_device_key(
     device = get_device_or_404(db, device_uid)
     api_key = secrets.token_urlsafe(32)
     device.api_key_hash = hash_device_key(api_key)
+    device.credential_version += 1
+    db.commit()
+    db.refresh(device)
+    return DeviceProvisioned(api_key=api_key, **DeviceOut.model_validate(device).model_dump())
+
+
+@app.post("/devices/{device_uid}/revoke", response_model=DeviceOut)
+def revoke_device_credentials(
+    device_uid: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_operator),
+) -> DeviceOut:
+    device = get_device_or_404(db, device_uid)
+    device.active = False
+    device.credential_version += 1
+    device.transfer_code_hash = None
+    device.transfer_expires_at = None
+    db.commit()
+    db.refresh(device)
+    return DeviceOut.model_validate(device)
+
+
+@app.post("/devices/{device_uid}/activate", response_model=DeviceProvisioned)
+def reactivate_device_credentials(
+    device_uid: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_operator),
+) -> DeviceProvisioned:
+    device = get_device_or_404(db, device_uid)
+    api_key = secrets.token_urlsafe(32)
+    device.api_key_hash = hash_device_key(api_key)
+    device.credential_version += 1
+    device.active = True
     db.commit()
     db.refresh(device)
     return DeviceProvisioned(api_key=api_key, **DeviceOut.model_validate(device).model_dump())

@@ -70,10 +70,10 @@ Manual commands require confirmation. Every request receives a durable lifecycle
 
 1. Select **Create account**, enter an email address, and choose a password with at least 12 characters, uppercase, lowercase, and a number.
 2. Open the time-limited verification link sent by the control board, then sign in with the verified email address.
-3. Scan the feeder QR code or enter the device UID and one-time pairing code supplied with the physical feeder.
+3. Select **Scan setup QR**, choose a photo of the feeder label, or enter the device UID and one-time proof-of-possession manually.
 4. Confirm that the feeder appears under **Selected device**. Until a feeder is paired, the account stays empty and physical controls remain disabled.
 
-Each customer can see and control only devices paired to their account. Pairing consumes the code so it cannot be reused. **Remove selected feeder from this account** detaches the feeder and returns a replacement one-time code for a controlled transfer. The **Forgot password?** flow sends a single-use reset link without revealing whether an email address is registered.
+Each customer can see and control only devices claimed by their account. A claim expires and is consumed atomically, so the same QR cannot be reused. **Create transfer link** lets another verified customer take ownership without disconnecting the feeder; the current owner can cancel an unused link. **Remove selected feeder from this account** releases it immediately and returns a new expiring proof. The **Forgot password?** flow sends a single-use reset link without revealing whether an email address is registered.
 
 ### 1. Sign in
 
@@ -206,8 +206,26 @@ The public demo is deliberately separated from the physical control path. Its co
 
 The ESP32 connects directly to the production broker over Wi-Fi; it does not need to remain connected to a computer after flashing.
 
+To manufacture a new unit, install `backend/requirements-dev.txt`, keep the administrator password in an environment variable, and run:
+
+```powershell
+$secureAdminPassword = Read-Host "Administrator password" -AsSecureString
+$env:FISH_FEEDER_ADMIN_PASSWORD = [Net.NetworkCredential]::new("", $secureAdminPassword).Password
+python scripts/manufacture_device.py `
+  --api-url https://feeder.smartfishfeeder.org/api `
+  --admin-username admin `
+  --device-uid feeder-101 `
+  --name "Reef feeder 101" `
+  --mqtt-host mqtt.smartfishfeeder.org `
+  --mqtt-root-ca-file simulation/esp32-mqtt/amazon-root-ca-1.pem `
+  --output-dir build/manufacturing/feeder-101
+Remove-Item Env:FISH_FEEDER_ADMIN_PASSWORD
+```
+
+In a non-interactive shell, set `FISH_FEEDER_ADMIN_PASSWORD` to the plaintext value only for the lifetime of the process. The command never accepts the password as an argument. It creates a printable claim label and QR, a protected device-secret file, a generated firmware header, and server-registration snippets. The QR contains only the expiring one-time claim URL; it does not contain the API key, MQTT password, or HMAC secret. Keep the remaining bundle private and delete temporary plaintext copies after commissioning.
+
 1. Copy `firmware/esp32_mqtt/feeder_secrets.example.h` to `firmware/esp32_mqtt/feeder_secrets.h`.
-2. Add the device's Wi-Fi SSID and password.
+2. For self-service setup, leave the Wi-Fi values empty and configure the generated per-device SoftAP password. The customer enters home Wi-Fi through the feeder's local setup page.
 3. Set the MQTT host to `mqtt.smartfishfeeder.org` and the port to `8883`.
 4. Enable verified TLS and keep insecure TLS disabled.
 5. Add the provisioned device UID, MQTT username/password, HMAC shared secret, and appropriate trusted root CA.
@@ -228,6 +246,7 @@ Never commit `feeder_secrets.h`. Follow the [physical commissioning checklist](d
 | GPIO 26 | Pump driver forward | Dispense direction |
 | GPIO 27 | Pump driver reverse | Tube-cleaning direction |
 | GPIO 33 | Pump enable | Motor-driver enable |
+| GPIO 0 | Provisioning reset | Hold low for three seconds during boot to clear Wi-Fi and reopen setup mode |
 
 ## How a command reaches the feeder
 
@@ -308,8 +327,8 @@ GitHub Actions runs the following on every pull request:
 
 - Ruff formatting and linting
 - Strict mypy type checking
-- 74 Python backend, SMTP onboarding, MQTT transport, account-isolation, and Wokwi contract tests
-- 32 dashboard tests covering live, demo, customer onboarding, schedule management, empty, and failed API states
+- 79 Python backend, SMTP onboarding, secure device claims, MQTT transport, account-isolation, manufacturing, and Wokwi contract tests
+- 34 dashboard tests covering live, demo, QR claims, customer onboarding, schedule management, empty, and failed API states
 - Browser-driven dashboard-to-Wokwi closed-loop verification
 - Python and JavaScript dependency vulnerability audits
 - Plaintext and verified-TLS ESP32 firmware compilation
@@ -317,14 +336,14 @@ GitHub Actions runs the following on every pull request:
 - Development and production Docker configuration validation
 - Complete Docker Compose build and end-to-end smoke test
 
-The current local suite measures 90.79% Python coverage and 84.75% dashboard line coverage.
+The current local suite measures 91.35% Python coverage and 84.53% dashboard line coverage.
 
 ## Main APIs
 
 | Area | Endpoints |
 | --- | --- |
 | Authentication | `POST /auth/register`, `POST /auth/verify-email`, `POST /auth/token`, password reset, `GET /users/me` |
-| Devices | `POST/GET /devices`, `POST /devices/pair`, pairing transfer, `POST /devices/{uid}/rotate-key` |
+| Devices | `POST/GET /devices`, `POST /devices/claim`, claim/transfer cancellation, key rotation, revocation, and reactivation |
 | Telemetry | `POST/GET /telemetry`, `GET /device-status` |
 | Schedules | `POST/GET /devices/{uid}/schedules`, `PATCH/DELETE /schedules/{id}` |
 | Operations | `GET /feeding-executions`, `GET /alerts`, `POST /alerts/{id}/acknowledge` |
@@ -340,10 +359,12 @@ firmware/esp32_mqtt/           Physical ESP32 MQTT/TLS firmware
 firmware/sketch.ino            Preserved original Arduino Mega prototype
 mock_device/                   Local device simulator and MQTT bridge
 simulation/esp32-mqtt/         Wokwi ESP32 virtual hardware
+scripts/manufacture_device.py  One-command device bundle and claim-QR generator
 deploy/                        Production proxy, broker, ACL, and health files
 docs/cloud_deployment.md       VPS, DNS, TLS, secrets, and operations guide
 docs/wiring.md                 ESP32-to-hardware wiring map
 docs/physical_commissioning.md Safe physical bring-up procedure
+docs/provisioning_without_hardware.md Implemented onboarding and remaining physical acceptance
 docker-compose.yml             Complete local demonstration stack
 docker-compose.production.yml  HTTPS and MQTT/TLS production stack
 ```

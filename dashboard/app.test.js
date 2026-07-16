@@ -11,6 +11,8 @@ const {
   authenticateOperator,
   clearOperatorSession,
   confirmCustomerPasswordReset,
+  cancelDeviceTransfer,
+  createDeviceTransfer,
   deleteFeedingSchedule,
   createFeedingSchedule,
   createCommandDialog,
@@ -19,6 +21,7 @@ const {
   issueDeviceCommand,
   parseActuationDuration,
   pairCustomerDevice,
+  parseDeviceClaimPayload,
   passwordsMatch,
   populateDeviceSelect,
   refreshDashboard,
@@ -63,7 +66,11 @@ function installDom() {
     <div id="operatorSession" hidden><span id="operatorUsername"></span><label id="devicePicker"><select id="deviceSelect"></select></label>
       <button id="logoutButton" type="button">Logout</button></div>
     <div id="customerDevicePanel" hidden><p id="pairingIntroText"></p>
+      <button id="scanDeviceQrButton" type="button">Scan</button><input id="deviceQrInput" type="file">
+      <input id="claimLinkInput">
       <form id="devicePairingForm"><input name="device_uid"><input name="pairing_code"><button type="submit">Pair</button></form>
+      <button id="transferDeviceButton" type="button" hidden>Transfer</button>
+      <button id="cancelTransferButton" type="button" hidden>Cancel transfer</button>
       <button id="unpairDeviceButton" type="button" hidden>Unpair</button><p id="pairingMessage" hidden></p></div>
     <p id="demoModeBanner" hidden></p>
     <section class="aquarium-hero" data-playing="true">
@@ -113,6 +120,8 @@ function installDom() {
 
 beforeEach(() => {
   installDom();
+  delete window.BarcodeDetector;
+  delete window.createImageBitmap;
   document.getElementById("aquariumVideo").play = vi.fn().mockResolvedValue(undefined);
   document.getElementById("aquariumVideo").pause = vi.fn();
   const dialog = document.getElementById("commandDialog");
@@ -294,18 +303,75 @@ describe("authenticated API client", () => {
     await requestCustomerPasswordReset("person@example.com", { fetchImpl });
     await confirmCustomerPasswordReset("reset-token", "NewSecureFeeder84", { fetchImpl });
     await pairCustomerDevice("feeder-007", "PAIR-CODE", "customer-jwt", { fetchImpl });
+    await createDeviceTransfer("feeder-007", "customer-jwt", { fetchImpl });
+    await cancelDeviceTransfer("feeder-007", "customer-jwt", { fetchImpl });
 
     expect(fetchImpl.mock.calls.map((call) => call[0])).toEqual([
       expect.stringContaining("/auth/register"),
       expect.stringContaining("/auth/password-reset/request"),
       expect.stringContaining("/auth/password-reset/confirm"),
-      expect.stringContaining("/devices/pair")
+      expect.stringContaining("/devices/claim"),
+      expect.stringContaining("/devices/feeder-007/transfer"),
+      expect.stringContaining("/devices/feeder-007/transfer")
     ]);
     expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({
       email: "person@example.com",
       password: "SecureFeeder42"
     });
+    expect(JSON.parse(fetchImpl.mock.calls[3][1].body)).toEqual({
+      device_uid: "feeder-007",
+      proof_of_possession: "PAIR-CODE"
+    });
     expect(fetchImpl.mock.calls[3][1].headers.Authorization).toBe("Bearer customer-jwt");
+    expect(fetchImpl.mock.calls[4][1].method).toBe("POST");
+    expect(fetchImpl.mock.calls[5][1].method).toBe("DELETE");
+  });
+
+  it("parses current, legacy, and JSON feeder claim payloads", () => {
+    expect(parseDeviceClaimPayload(
+      "https://feeder.example.test/?device_uid=feeder-007&claim_code=ONE-TIME-CODE"
+    )).toEqual({ deviceUid: "feeder-007", proofOfPossession: "ONE-TIME-CODE" });
+    expect(parseDeviceClaimPayload(
+      "?device_uid=feeder-008&pairing_code=LEGACY-CODE",
+      "https://feeder.example.test/"
+    )).toEqual({ deviceUid: "feeder-008", proofOfPossession: "LEGACY-CODE" });
+    expect(parseDeviceClaimPayload(JSON.stringify({
+      device_uid: "feeder-009",
+      proof_of_possession: "JSON-CLAIM-CODE"
+    }))).toEqual({ deviceUid: "feeder-009", proofOfPossession: "JSON-CLAIM-CODE" });
+    expect(() => parseDeviceClaimPayload("https://example.test/no-claim")).toThrow("valid feeder ID");
+  });
+
+  it("fills claim fields from QR content and handles supported and unsupported scanners", async () => {
+    const controller = createDashboardController({
+      documentRef: document,
+      fetchImpl: vi.fn(),
+      storage: sessionStorage,
+      chartFactory: null
+    });
+    const claimUrl = "https://feeder.example.test/?device_uid=feeder-qr&claim_code=SCANNED-CODE";
+    expect(controller.applyClaimPayload(claimUrl)).toEqual({
+      deviceUid: "feeder-qr",
+      proofOfPossession: "SCANNED-CODE"
+    });
+    expect(document.querySelector("[name='device_uid']").value).toBe("feeder-qr");
+    expect(document.querySelector("[name='pairing_code']").value).toBe("SCANNED-CODE");
+
+    expect(await controller.scanClaimQr({ name: "claim.png" })).toBeNull();
+    expect(document.getElementById("pairingMessage").textContent).toContain("not supported");
+
+    const bitmap = { close: vi.fn() };
+    window.createImageBitmap = vi.fn().mockResolvedValue(bitmap);
+    window.BarcodeDetector = class BarcodeDetector {
+      async detect() {
+        return [{ rawValue: claimUrl }];
+      }
+    };
+    expect(await controller.scanClaimQr({ name: "claim.png" })).toEqual({
+      deviceUid: "feeder-qr",
+      proofOfPossession: "SCANNED-CODE"
+    });
+    expect(bitmap.close).toHaveBeenCalled();
   });
 
   it("calls the authenticated feeding schedule contracts", async () => {
@@ -542,9 +608,19 @@ describe("operator controller", () => {
         return response({ username: "person@example.com", email: "person@example.com", role: "customer" });
       }
       if (url.endsWith("/devices") && method === "GET") return response(paired ? [customerDevice] : []);
-      if (url.endsWith("/devices/pair") && method === "POST") {
+      if (url.endsWith("/devices/claim") && method === "POST") {
         paired = true;
         return response(customerDevice);
+      }
+      if (url.endsWith("/devices/customer-feeder/transfer") && method === "POST") {
+        return response({
+          device_uid: "customer-feeder",
+          claim_url: "https://feeder.test/?device_uid=customer-feeder&claim_code=TRANSFER-CODE",
+          expires_at: "2026-01-01T13:00:00Z"
+        });
+      }
+      if (url.endsWith("/devices/customer-feeder/transfer") && method === "DELETE") {
+        return response({ message: "cancelled" });
       }
       if (url.includes("/pairing") && method === "DELETE") {
         paired = false;
@@ -584,6 +660,9 @@ describe("operator controller", () => {
     expect(controller.state.deviceUid).toBe("customer-feeder");
     expect(document.getElementById("devicePicker").hidden).toBe(false);
     expect(document.getElementById("unpairDeviceButton").hidden).toBe(false);
+    expect(document.getElementById("transferDeviceButton").hidden).toBe(false);
+    expect((await controller.createTransferOffer()).claim_url).toContain("TRANSFER-CODE");
+    expect(await controller.cancelTransferOffer()).toBe(true);
 
     window.confirm = vi.fn().mockReturnValue(true);
     expect(await controller.unpairSelectedDevice()).toBe(true);

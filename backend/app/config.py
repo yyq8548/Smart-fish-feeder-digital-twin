@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     registration_rate_limit_per_minute: int = Field(default=5, ge=1)
     password_reset_rate_limit_per_minute: int = Field(default=5, ge=1)
     pairing_rate_limit_per_minute: int = Field(default=10, ge=1)
+    device_claim_expire_hours: int = Field(default=8_760, ge=1, le=17_520)
+    device_transfer_expire_hours: int = Field(default=24, ge=1, le=168)
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="FISH_FEEDER_")
 

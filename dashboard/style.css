@@ -980,6 +980,10 @@ button:focus-visible { outline: 3px solid rgba(99, 234, 215, 0.25); outline-offs
 .pairing-form input { border-color: #444; color: #fff; background: #181818; }
 .pairing-form input:focus { border-color: var(--healthy); background: #181818; box-shadow: 0 0 0 3px rgba(200, 255, 99, 0.15); }
 .pairing-form .button.primary { color: #101010; background: var(--healthy); }
+.claim-tools { display: grid; grid-template-columns: auto minmax(260px, 1fr); align-items: end; gap: 10px; margin: 16px 0 10px; }
+.claim-tools label { display: grid; gap: 6px; color: #bbb; font-size: 9px; font-weight: 850; text-transform: uppercase; }
+.claim-tools input { border-color: #444; color: #fff; background: #181818; }
+.ownership-actions { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
 .customer-device-panel .danger-link { grid-column: 2; justify-self: start; color: #ff9d8e; }
 .customer-device-panel .notice { grid-column: 1 / -1; margin: 0; }
 
@@ -1097,6 +1101,7 @@ body[data-account-role="customer"] .device-picker { flex: 1 1 280px; }
   .account-form { padding: 14px; }
   .pairing-form { grid-template-columns: 1fr; }
   .pairing-form .button { grid-column: 1; }
+  .claim-tools { grid-template-columns: 1fr; }
   .customer-device-panel { padding: 17px; }
   .schedule-form,
   .schedule-list-shell { padding: 18px; }
