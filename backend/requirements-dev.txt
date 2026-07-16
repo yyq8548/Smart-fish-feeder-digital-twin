@@ -4,5 +4,6 @@ mypy==1.14.1
 pip-audit==2.7.3
 pytest==9.0.3
 pytest-cov==6.0.0
+qrcode==8.2
 ruff==0.8.6
 types-requests==2.32.0.20241016

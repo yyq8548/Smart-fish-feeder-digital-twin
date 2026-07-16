@@ -119,6 +119,21 @@ def test_closed_loop_scenario_proves_command_gpio_and_completion() -> None:
     assert "expected:" not in scenario
 
 
+def test_firmware_contains_softap_provisioning_and_factory_reset_contract() -> None:
+    firmware = FIRMWARE.read_text(encoding="utf-8")
+    for contract in (
+        "ProvisioningState::ACCESS_POINT",
+        'provisioningServer.on("/configure", HTTP_POST',
+        'provisioningServer.on("/status", HTTP_GET',
+        'networkPreferences.begin("feeder_net"',
+        'networkPreferences.putString("wifi_ssid"',
+        "FEEDER_PROVISIONING_AP_PASSWORD",
+        "Provisioning credentials cleared",
+        "ESP.restart()",
+    ):
+        assert contract in firmware
+
+
 def test_closed_loop_header_enables_verified_tls(tmp_path: Path) -> None:
     output = tmp_path / "feeder_secrets.h"
     environment = {

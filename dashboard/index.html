@@ -262,20 +262,32 @@
               <p id="pairingIntroText">Enter the device UID and one-time pairing code printed with your feeder.</p>
             </div>
           </div>
+          <div class="claim-tools" aria-label="Feeder QR setup">
+            <button class="button secondary" id="scanDeviceQrButton" type="button">Scan setup QR</button>
+            <input id="deviceQrInput" type="file" accept="image/*" capture="environment" hidden />
+            <label>
+              <span>Or paste setup link</span>
+              <input id="claimLinkInput" autocomplete="off" placeholder="https://feeder.smartfishfeeder.org/?device_uid=..." />
+            </label>
+          </div>
           <form id="devicePairingForm" class="pairing-form">
             <label>
               <span>Device UID</span>
               <input name="device_uid" autocomplete="off" placeholder="feeder-001" required />
             </label>
             <label>
-              <span>Pairing code</span>
-              <input name="pairing_code" autocomplete="one-time-code" placeholder="One-time code" required />
+              <span>Proof-of-possession</span>
+              <input name="pairing_code" autocomplete="one-time-code" placeholder="One-time setup code" required />
             </label>
-            <button class="button primary" type="submit">Pair feeder</button>
+            <button class="button primary" type="submit">Claim feeder</button>
           </form>
-          <button class="auth-text-button danger-link" id="unpairDeviceButton" type="button" hidden>
-            Remove selected feeder from this account
-          </button>
+          <div class="ownership-actions">
+            <button class="auth-text-button" id="transferDeviceButton" type="button" hidden>Create transfer link</button>
+            <button class="auth-text-button" id="cancelTransferButton" type="button" hidden>Cancel transfer link</button>
+            <button class="auth-text-button danger-link" id="unpairDeviceButton" type="button" hidden>
+              Remove selected feeder from this account
+            </button>
+          </div>
           <p id="pairingMessage" class="notice" aria-live="polite" hidden></p>
         </div>
       </div>

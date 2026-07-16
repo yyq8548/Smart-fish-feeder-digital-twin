@@ -4,6 +4,8 @@
 // Replace every placeholder before using it on physical hardware.
 #define FEEDER_WIFI_SSID "your-wifi-ssid"
 #define FEEDER_WIFI_PASSWORD "your-wifi-password"
+#define FEEDER_ENABLE_SOFTAP_PROVISIONING 1
+#define FEEDER_PROVISIONING_AP_PASSWORD "unique-device-setup-password"
 
 #define FEEDER_MQTT_HOST "your-broker.example.com"
 #define FEEDER_MQTT_PORT 8883

@@ -16,6 +16,7 @@ umask 077
 : "${FISH_FEEDER_ADMIN_PASSWORD:?FISH_FEEDER_ADMIN_PASSWORD is required}"
 : "${FISH_FEEDER_JWT_SECRET:?FISH_FEEDER_JWT_SECRET is required}"
 : "${MQTT_SHARED_SECRET:?MQTT_SHARED_SECRET is required}"
+MQTT_DEVICE_CREDENTIALS="${MQTT_DEVICE_CREDENTIALS:-}"
 
 validate_secret() {
   secret_name="$1"
@@ -133,10 +134,49 @@ trap 'rm -f "$temporary_file"; rmdir "$temporary_directory" 2>/dev/null || true'
 
 mosquitto_passwd -b -c "$temporary_file" "$MQTT_BRIDGE_USERNAME" "$MQTT_BRIDGE_PASSWORD"
 mosquitto_passwd -b "$temporary_file" "$MQTT_DEVICE_USERNAME" "$MQTT_DEVICE_PASSWORD"
+additional_device_count=0
+seen_usernames="|$MQTT_BRIDGE_USERNAME|$MQTT_DEVICE_USERNAME|"
+seen_passwords="|$MQTT_BRIDGE_PASSWORD|$MQTT_DEVICE_PASSWORD|"
+if [ -n "$MQTT_DEVICE_CREDENTIALS" ]; then
+  previous_ifs="$IFS"
+  IFS=','
+  for credential in $MQTT_DEVICE_CREDENTIALS; do
+    username="${credential%%:*}"
+    password="${credential#*:}"
+    if [ -z "$username" ] || [ "$password" = "$credential" ]; then
+      echo "MQTT_DEVICE_CREDENTIALS entries must use device_uid:password" >&2
+      exit 1
+    fi
+    case "$username" in
+      *[!A-Za-z0-9._-]*|bridge)
+        echo "Invalid additional MQTT device username: $username" >&2
+        exit 1
+        ;;
+    esac
+    case "$seen_usernames" in
+      *"|$username|"*)
+        echo "Duplicate MQTT device username: $username" >&2
+        exit 1
+        ;;
+    esac
+    validate_secret "MQTT password for $username" "$password" 24
+    case "$seen_passwords" in
+      *"|$password|"*)
+        echo "Additional MQTT device passwords must be unique" >&2
+        exit 1
+        ;;
+    esac
+    mosquitto_passwd -b "$temporary_file" "$username" "$password"
+    seen_usernames="${seen_usernames}${username}|"
+    seen_passwords="${seen_passwords}${password}|"
+    additional_device_count=$((additional_device_count + 1))
+  done
+  IFS="$previous_ifs"
+fi
 chmod 600 "$temporary_file"
 chown 1883:1883 "$temporary_file"
 mv -f "$temporary_file" /mosquitto/secrets/passwords
 rmdir "$temporary_directory"
 trap - EXIT INT TERM
 
-echo "Mosquitto password file initialized for bridge and ${MQTT_DEVICE_USERNAME}."
+echo "Mosquitto password file initialized for bridge, ${MQTT_DEVICE_USERNAME}, and ${additional_device_count} additional devices."

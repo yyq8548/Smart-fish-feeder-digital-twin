@@ -6,6 +6,7 @@
 #include <PubSubClient.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <WebServer.h>
 #include <ctype.h>
 #include <esp_system.h>
 #include <math.h>
@@ -81,12 +82,21 @@
 #define FEEDER_MQTT_TOPIC_PREFIX "fish-feeder"
 #endif
 
+#ifndef FEEDER_ENABLE_SOFTAP_PROVISIONING
+#define FEEDER_ENABLE_SOFTAP_PROVISIONING 1
+#endif
+
+#ifndef FEEDER_PROVISIONING_AP_PASSWORD
+#define FEEDER_PROVISIONING_AP_PASSWORD ""
+#endif
+
 constexpr uint8_t TEMP_SENSOR_PIN = 4;
 constexpr uint8_t MANUAL_FEED_BUTTON_PIN = 18;
 constexpr uint8_t COOLING_OUTPUT_PIN = 25;
 constexpr uint8_t PUMP_FORWARD_PIN = 26;
 constexpr uint8_t PUMP_REVERSE_PIN = 27;
 constexpr uint8_t PUMP_ENABLE_PIN = 33;
+constexpr uint8_t PROVISIONING_RESET_PIN = 0;
 
 constexpr float TEMP_LOW_THRESHOLD_C = 3.0F;
 constexpr float TEMP_HIGH_THRESHOLD_C = 5.0F;
@@ -140,6 +150,15 @@ enum class ActiveCommandKind : uint8_t {
   CLEAN_PUMP,
 };
 
+enum class ProvisioningState : uint8_t {
+  FACTORY,
+  ACCESS_POINT,
+  CREDENTIALS_SAVED,
+  CONNECTING,
+  ONLINE,
+  FAILED,
+};
+
 struct TelemetrySnapshot {
   uint64_t sequenceNumber;
   bool temperatureAvailable;
@@ -179,6 +198,8 @@ PubSubClient mqttClient(networkClient);
 OneWire oneWire(TEMP_SENSOR_PIN);
 DallasTemperature temperatureSensor(&oneWire);
 Preferences preferences;
+Preferences networkPreferences;
+WebServer provisioningServer(80);
 
 CyclePhase cyclePhase = CyclePhase::IDLE;
 CoolingMode coolingMode = CoolingMode::AUTOMATIC;
@@ -228,6 +249,12 @@ uint32_t lastMqttAttemptAtMs = 0;
 uint32_t buttonChangedAtMs = 0;
 int lastButtonReading = HIGH;
 int stableButtonState = HIGH;
+
+ProvisioningState provisioningState = ProvisioningState::FACTORY;
+String runtimeWiFiSsid;
+String runtimeWiFiPassword;
+bool provisioningPortalActive = false;
+uint32_t provisioningRestartAtMs = 0;
 
 bool timeConfigured = false;
 bool startupTelemetryQueued = false;
@@ -681,15 +708,142 @@ void publishQueuedCommandResult() {
   --commandResultCount;
 }
 
+const char *provisioningStateName() {
+  switch (provisioningState) {
+    case ProvisioningState::FACTORY:
+      return "factory";
+    case ProvisioningState::ACCESS_POINT:
+      return "access_point";
+    case ProvisioningState::CREDENTIALS_SAVED:
+      return "credentials_saved";
+    case ProvisioningState::CONNECTING:
+      return "connecting";
+    case ProvisioningState::ONLINE:
+      return "online";
+    case ProvisioningState::FAILED:
+      return "failed";
+  }
+  return "unknown";
+}
+
+void clearNetworkCredentials() {
+  if (!networkPreferences.begin("feeder_net", false)) {
+    Serial.println("ERROR unable to open NVS for network reset");
+    return;
+  }
+  networkPreferences.clear();
+  networkPreferences.end();
+  Serial.println("Provisioning credentials cleared");
+}
+
+bool provisioningResetRequested() {
+  pinMode(PROVISIONING_RESET_PIN, INPUT_PULLUP);
+  if (digitalRead(PROVISIONING_RESET_PIN) != LOW) {
+    return false;
+  }
+  Serial.println("Hold provisioning reset for 3 seconds to clear WiFi credentials");
+  delay(3000);
+  return digitalRead(PROVISIONING_RESET_PIN) == LOW;
+}
+
+void loadNetworkCredentials() {
+  runtimeWiFiSsid = FEEDER_WIFI_SSID;
+  runtimeWiFiPassword = FEEDER_WIFI_PASSWORD;
+  if (!networkPreferences.begin("feeder_net", true)) {
+    Serial.println("WARN unable to read WiFi credentials from NVS");
+    return;
+  }
+  const String storedSsid = networkPreferences.getString("wifi_ssid", "");
+  if (!storedSsid.isEmpty()) {
+    runtimeWiFiSsid = storedSsid;
+    runtimeWiFiPassword = networkPreferences.getString("wifi_pass", "");
+  }
+  networkPreferences.end();
+}
+
+bool saveNetworkCredentials(const String &ssid, const String &password) {
+  if (ssid.isEmpty() || ssid.length() > 32 || password.length() > 63) {
+    return false;
+  }
+  if (!networkPreferences.begin("feeder_net", false)) {
+    return false;
+  }
+  const bool ssidSaved = networkPreferences.putString("wifi_ssid", ssid) > 0;
+  networkPreferences.putString("wifi_pass", password);
+  const bool saved = ssidSaved && networkPreferences.getString("wifi_pass", "") == password;
+  networkPreferences.end();
+  return saved;
+}
+
+void sendProvisioningPage() {
+  const char page[] PROGMEM =
+      "<!doctype html><meta name=viewport content='width=device-width'><title>Smart Fish Feeder Setup</title>"
+      "<style>body{font:18px system-ui;max-width:32rem;margin:3rem auto;padding:1rem}label{display:block;margin:1rem 0}"
+      "input,button{font:inherit;width:100%;padding:.8rem;box-sizing:border-box}</style>"
+      "<h1>Connect your feeder</h1><p>Enter the WiFi network this feeder should use.</p>"
+      "<form method=post action=/configure><label>WiFi name<input name=ssid maxlength=32 required></label>"
+      "<label>WiFi password<input name=password type=password maxlength=63></label>"
+      "<button type=submit>Save and restart</button></form>";
+  provisioningServer.send(200, "text/html", page);
+}
+
+void startProvisioningPortal() {
+#if FEEDER_ENABLE_SOFTAP_PROVISIONING
+  char accessPointName[40];
+  snprintf(accessPointName, sizeof(accessPointName), "FishFeeder-%.16s", FEEDER_DEVICE_UID);
+  WiFi.mode(WIFI_AP);
+  const bool passwordConfigured = strlen(FEEDER_PROVISIONING_AP_PASSWORD) >= 8;
+  const bool started = passwordConfigured ? WiFi.softAP(accessPointName, FEEDER_PROVISIONING_AP_PASSWORD)
+                                          : WiFi.softAP(accessPointName);
+  if (!started) {
+    provisioningState = ProvisioningState::FAILED;
+    Serial.println("ERROR unable to start provisioning access point");
+    return;
+  }
+  if (!passwordConfigured) {
+    Serial.println("WARN provisioning access point is open; set FEEDER_PROVISIONING_AP_PASSWORD in production");
+  }
+  provisioningServer.on("/", HTTP_GET, sendProvisioningPage);
+  provisioningServer.on("/status", HTTP_GET, []() {
+    const String payload = String("{\"device_uid\":\"") + FEEDER_DEVICE_UID + "\",\"state\":\"" +
+                           provisioningStateName() + "\"}";
+    provisioningServer.send(200, "application/json", payload);
+  });
+  provisioningServer.on("/configure", HTTP_POST, []() {
+    const String ssid = provisioningServer.arg("ssid");
+    const String password = provisioningServer.arg("password");
+    if (!saveNetworkCredentials(ssid, password)) {
+      provisioningServer.send(400, "text/plain", "Invalid WiFi credentials");
+      return;
+    }
+    provisioningState = ProvisioningState::CREDENTIALS_SAVED;
+    provisioningRestartAtMs = millis() + 1500;
+    provisioningServer.send(202, "text/plain", "Saved. The feeder is restarting.");
+  });
+  provisioningServer.onNotFound([]() { provisioningServer.sendHeader("Location", "/", true); provisioningServer.send(302); });
+  provisioningServer.begin();
+  provisioningPortalActive = true;
+  provisioningState = ProvisioningState::ACCESS_POINT;
+  Serial.print("Provisioning access point started: ");
+  Serial.println(accessPointName);
+  Serial.print("Provisioning URL: http://");
+  Serial.println(WiFi.softAPIP());
+#else
+  provisioningState = ProvisioningState::FAILED;
+  Serial.println("ERROR WiFi credentials missing and SoftAP provisioning is disabled");
+#endif
+}
+
 void beginWiFiConnection() {
   Serial.print("Connecting WiFi SSID=");
-  Serial.println(FEEDER_WIFI_SSID);
+  Serial.println(runtimeWiFiSsid);
   WiFi.disconnect();
 
-  if (strcmp(FEEDER_WIFI_SSID, "Wokwi-GUEST") == 0) {
-    WiFi.begin(FEEDER_WIFI_SSID, FEEDER_WIFI_PASSWORD, 6);
+  provisioningState = ProvisioningState::CONNECTING;
+  if (runtimeWiFiSsid == "Wokwi-GUEST") {
+    WiFi.begin(runtimeWiFiSsid.c_str(), runtimeWiFiPassword.c_str(), 6);
   } else {
-    WiFi.begin(FEEDER_WIFI_SSID, FEEDER_WIFI_PASSWORD);
+    WiFi.begin(runtimeWiFiSsid.c_str(), runtimeWiFiPassword.c_str());
   }
 }
 
@@ -721,6 +875,7 @@ bool configureMqttTransport() {
 
 void maintainWiFi(uint32_t nowMs) {
   if (WiFi.status() == WL_CONNECTED) {
+    provisioningState = ProvisioningState::ONLINE;
     if (!timeConfigured) {
       configTime(0, 0, "pool.ntp.org", "time.nist.gov");
       timeConfigured = true;
@@ -1446,6 +1601,11 @@ void setup() {
   Serial.begin(115200);
   initializeCommandWatermark();
 
+  if (provisioningResetRequested()) {
+    clearNetworkCredentials();
+  }
+  loadNetworkCredentials();
+
   pinMode(MANUAL_FEED_BUTTON_PIN, INPUT_PULLUP);
   pinMode(COOLING_OUTPUT_PIN, OUTPUT);
   pinMode(PUMP_FORWARD_PIN, OUTPUT);
@@ -1490,11 +1650,15 @@ void setup() {
   mqttClient.setKeepAlive(30);
   mqttClient.setSocketTimeout(5);
 
-  WiFi.mode(WIFI_STA);
   lastWiFiAttemptAtMs = millis();
   lastMqttAttemptAtMs = millis() - RECONNECT_INTERVAL_MS;
   lastSensorReadAtMs = millis() - SENSOR_INTERVAL_MS;
-  beginWiFiConnection();
+  if (runtimeWiFiSsid.isEmpty()) {
+    startProvisioningPortal();
+  } else {
+    WiFi.mode(WIFI_STA);
+    beginWiFiConnection();
+  }
 
   Serial.println("Smart Fish Feeder ESP32 MQTT firmware started");
   Serial.print("Telemetry topic: ");
@@ -1510,6 +1674,15 @@ void setup() {
 
 void loop() {
   const uint32_t nowMs = millis();
+
+  if (provisioningPortalActive) {
+    provisioningServer.handleClient();
+    if (provisioningRestartAtMs != 0 && static_cast<int32_t>(nowMs - provisioningRestartAtMs) >= 0) {
+      ESP.restart();
+    }
+    delay(2);
+    return;
+  }
 
   maintainWiFi(nowMs);
   maintainMqtt(nowMs);
