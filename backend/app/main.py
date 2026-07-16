@@ -379,14 +379,16 @@ def register_customer(
         )
         db.add(user)
         try:
+            # Flush first so the signed verification token can include the user ID,
+            # but keep the transaction reversible until SMTP accepts the message.
+            db.flush()
+            send_verification_email(user)
             db.commit()
         except IntegrityError:
             db.rollback()
             return MessageResponse(message="Check your email for an account verification link.")
-        db.refresh(user)
-        try:
-            send_verification_email(user)
         except Exception as exc:
+            db.rollback()
             logger.exception("verification_email_delivery_failed", extra={"user_id": user.id})
             raise HTTPException(status_code=503, detail="Verification email could not be sent") from exc
     elif existing.role == "customer" and not existing.email_verified and existing.active:
