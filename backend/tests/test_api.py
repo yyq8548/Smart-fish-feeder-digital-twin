@@ -21,6 +21,31 @@ def test_operator_login_and_protected_identity(client: TestClient, operator_head
     assert client.get("/users/me", headers={"Authorization": "Bearer invalid"}).status_code == 401
 
 
+def test_bootstrap_rotates_changed_operator_password_and_revokes_tokens(client: TestClient) -> None:
+    from app.database import SessionLocal
+    from app.main import seed_bootstrap_records, settings
+    from app.models import User
+    from app.security import create_access_token, hash_password, verify_password
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        operator = db.scalar(select(User).where(User.username == settings.admin_username))
+        assert operator is not None
+        operator.password_hash = hash_password("superseded-admin-password")
+        previous_auth_version = operator.auth_version
+        stale_token = create_access_token(operator)
+        db.commit()
+
+        seed_bootstrap_records(db)
+        db.refresh(operator)
+
+        assert verify_password(settings.admin_password, operator.password_hash)
+        assert operator.auth_version == previous_auth_version + 1
+
+    response = client.get("/users/me", headers={"Authorization": f"Bearer {stale_token}"})
+    assert response.status_code == 401
+
+
 def test_public_demo_is_synthetic_and_isolated(client: TestClient, demo_headers: dict[str, str]) -> None:
     from app.database import SessionLocal
     from app.models import DeviceCommand

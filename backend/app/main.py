@@ -103,6 +103,9 @@ def seed_bootstrap_records(db: Session) -> None:
     else:
         user.role = "operator"
         user.email_verified = True
+        if not verify_password(settings.admin_password, user.password_hash):
+            user.password_hash = hash_password(settings.admin_password)
+            user.auth_version += 1
     demo_users = list(db.scalars(select(User).where(User.role == "demo")))
     for existing_demo in demo_users:
         if not settings.demo_enabled or existing_demo.username != settings.demo_username:
